@@ -3190,6 +3190,21 @@ diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/Theme.swift work/
          }
      }
      var style: UIUserInterfaceStyle {
+diff -ruN -x .git -x Screenshots -x third_party base/ios/project.yml work/ios/project.yml
+--- base/ios/project.yml	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/project.yml	2026-11-26 03:24:30.217917372 +0800
+@@ -110,6 +110,11 @@
+         script: |
+           set -e
+           cd "$SRCROOT/.."
++          # xcodebuild 把 iOS 的 SDK 变量导给了这个 make。tl/Makefile 要用 macOS SDK 编译
++          # 示例程序（clang -target arm64-apple-macos13），SDKROOT=iphoneos 会让它转去 iPhoneOS
++          # SDK 里找只在 macOS 存在的头（NSURLHandle.h），整个构建就断在这里。
++          # 这几个变量对 make 没用：ios-lib 自己用 xcrun --sdk iphoneos 指定。
++          unset SDKROOT PLATFORM_NAME IPHONEOS_DEPLOYMENT_TARGET ARCHS
+           make ios-lib build/henge-agent.gz build/tl-samples.dmg
+           ./tools/build_ios_restore.sh
+         basedOnDependencyAnalysis: false
 diff -ruN -x .git -x Screenshots -x third_party base/tl/loader/tl_loader.c work/tl/loader/tl_loader.c
 --- base/tl/loader/tl_loader.c	2026-11-16 02:14:26.000000000 +0800
 +++ work/tl/loader/tl_loader.c	2026-11-26 02:21:29.850184194 +0800
