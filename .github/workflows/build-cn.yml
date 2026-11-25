@@ -11,6 +11,11 @@ on:
         description: "原仓库的提交（留空用本补丁的基准）"
         required: false
         default: ""
+      no_patch:
+        description: "不应用补丁（排查原项目本身的问题）"
+        type: boolean
+        required: false
+        default: false
 
 env:
   HUSK: ${{ github.workspace }}/Husk
@@ -37,6 +42,7 @@ jobs:
           path: Henge
 
       - name: 应用汉化补丁
+        if: ${{ !inputs.no_patch }}
         run: |
           set -euxo pipefail
           cd Henge
@@ -96,8 +102,30 @@ jobs:
         run: make ios-lib
 
       - name: 打包 Henge.ipa
+        id: pkg
         working-directory: Henge
         run: zsh ios/scripts/package_ipa.sh
+
+      - name: 打包失败时导出完整构建日志
+        if: failure()
+        run: |
+          set -x
+          L=Henge/ios/build/DerivedData.buildlog
+          if [ -f "$L" ]; then
+            echo "===== 前 80 行 ====="; head -80 "$L"
+            echo "===== 所有 error ====="; grep -n -B2 -A6 "error:" "$L" | head -200
+            echo "===== 编译了哪些文件 ====="; grep -oE "^CompileC[^ ]* [^ ]*" "$L" | head -60
+          else
+            echo "没有构建日志"
+          fi
+
+      - name: 上传构建日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildlog
+          path: Henge/ios/build/DerivedData.buildlog
+          if-no-files-found: ignore
 
       - name: 上传 IPA
         uses: actions/upload-artifact@v4
