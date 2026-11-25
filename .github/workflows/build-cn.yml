@@ -1,0 +1,118 @@
+# 在 GitHub 托管的 macOS runner 上，从原仓库 + 汉化补丁构建 Henge.ipa，不需要 Mac。
+#
+# 公开仓库的 macOS 分钟免费。产物是未签名（ad-hoc）的 IPA：SideStore / AltStore 安装时用你的证书重签，
+# TrollStore 用 .tipa。
+name: 构建 Henge-CN
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "原仓库的提交（留空用本补丁的基准）"
+        required: false
+        default: ""
+
+env:
+  HUSK: ${{ github.workspace }}/Husk
+  IOS_DEPS: ${{ github.workspace }}/Husk/build/ios-arm64/sysroot
+  UPSTREAM_BASE: 7b557301195f130f900b1b4cd105c9ecf0fbc109
+
+jobs:
+  build:
+    # Xcode 27 / arm64，公开仓库免费
+    runs-on: xcode-27
+    timeout-minutes: 150
+
+    steps:
+      - name: 取出本仓库（补丁）
+        uses: actions/checkout@v4
+        with:
+          path: patch
+
+      - name: 取出原仓库
+        uses: actions/checkout@v4
+        with:
+          repository: Leviidev/Henge
+          ref: ${{ inputs.upstream_ref || '7b557301195f130f900b1b4cd105c9ecf0fbc109' }}
+          path: Henge
+
+      - name: 应用汉化补丁
+        run: |
+          set -euxo pipefail
+          cd Henge
+          P="$GITHUB_WORKSPACE/patch/henge-multi-app.patch"
+          if ! git apply --whitespace=nowarn "$P"; then
+            echo "直接应用失败，改走三方合并"
+            git apply -3 "$P"
+          fi
+          echo "--- 补丁改动的文件 ---"
+          git status --short | head -40
+
+      - name: 取出 Husk（预编译依赖的来源）
+        uses: actions/checkout@v4
+        with:
+          repository: Leviidev/Husk
+          path: Husk
+
+      - name: 缓存 Husk 源码与已编译产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            Husk/third_party/build
+            Husk/build
+          key: husk-ios-arm64-${{ hashFiles('Husk/scripts/build_ios.sh', 'Husk/scripts/fetch_sources.sh') }}
+
+      - name: 安装构建工具
+        run: |
+          set -euxo pipefail
+          brew install xcodegen meson ninja pkg-config
+          rustup target add aarch64-apple-ios || {
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            rustup target add aarch64-apple-ios
+          }
+
+      - name: 取 Husk 的第三方源码
+        working-directory: Husk
+        run: bash scripts/fetch_sources.sh
+
+      - name: 编译 Husk 的 iOS 库（libffi / glib / libslirp）
+        working-directory: Husk
+        run: bash scripts/build_ios.sh libffi glib libslirp
+
+      - name: 编译设备配对库
+        working-directory: Husk
+        run: bash scripts/build_rppairing_ios.sh
+
+      - name: 复制预编译依赖
+        working-directory: Henge
+        run: zsh ios/scripts/fetch_deps.sh
+
+      - name: 编译恢复栈
+        working-directory: Henge
+        run: zsh tools/build_ios_restore.sh
+
+      - name: 编译引擎与转译层
+        working-directory: Henge
+        run: make ios-lib
+
+      - name: 打包 Henge.ipa
+        working-directory: Henge
+        run: zsh ios/scripts/package_ipa.sh
+
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Henge-CN-ipa
+          path: /Users/runner/Desktop/Henge.ipa
+          if-no-files-found: error
+
+      - name: 打包 Henge.tipa
+        working-directory: Henge
+        run: zsh ios/scripts/package_ipa.sh --trollstore
+
+      - name: 上传 tipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: Henge-CN-tipa
+          path: /Users/runner/Desktop/Henge.tipa
+          if-no-files-found: ignore
