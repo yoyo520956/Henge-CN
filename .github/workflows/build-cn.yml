@@ -60,8 +60,24 @@ jobs:
           repository: Leviidev/Husk
           path: Husk
 
-      - name: 缓存 Husk 源码与已编译产物
+      # Husk 的三个库从源码编一次要 40–70 分钟，是整个流程的大头。cache 的 key 用脚本哈希，
+      # 脚本不变就一直复用；restore-keys 兜底，脚本小改也能拿到上一次的产物。
+      - name: 取回 Husk 编译缓存
+        id: huskcache
         uses: actions/cache@v4
+        with:
+          path: |
+            Husk/third_party/build
+            Husk/build
+          key: husk-ios-arm64-${{ hashFiles('Husk/scripts/build_ios.sh', 'Husk/scripts/fetch_sources.sh') }}
+          restore-keys: |
+            husk-ios-arm64-
+
+      # 失败时后置保存会被跳过，于是每次都得重编。这个步骤无条件执行，把这次编出来的存下。
+      - name: 保存 Husk 编译产物
+        if: always() && steps.huskcache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
         with:
           path: |
             Husk/third_party/build
