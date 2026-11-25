@@ -1,0 +1,3539 @@
+diff -ruN -x .git -x Screenshots -x third_party base/Makefile work/Makefile
+--- base/Makefile	2026-11-16 02:14:26.000000000 +0800
++++ work/Makefile	2026-11-26 02:47:40.229949478 +0800
+@@ -180,10 +180,10 @@
+ 	  -x objective-c -fobjc-arc tl/loader/tl_bundle.m tl/loader/tl_stubs.m -framework Foundation -lz -lbz2 -lcompression -o $@
+ # The glue for Mac apps with windows (ios/Henge/Native/henge-tl-app.m) on the Mac, against Henge's AppKit as tl/
+ # builds it: test_tl_app APP SNAPDIR [SECONDS] runs the app and draws its windows to PNG files.
+-$(B)/test_tl_app: tests/test_tl_app.m ios/Henge/Native/henge-tl-app.m ios/Henge/Native/henge-tl.c $(TL_SRC) host/jit_region.c tl/shim/appkit/*.m tl/shim/appkit/*.h | $(B)
++$(B)/test_tl_app: tests/test_tl_app.m ios/Henge/Native/henge-tl-app.m ios/Henge/Native/henge-tl.c ios/Henge/Native/henge-tl-identity.c $(TL_SRC) host/jit_region.c tl/shim/appkit/*.m tl/shim/appkit/*.h | $(B)
+ 	$(MAKE) -C tl build/tlios
+ 	$(CC) $(CFLAGS) -fblocks -Iios/Henge/Native tests/test_tl_app.m -x objective-c -fobjc-arc ios/Henge/Native/henge-tl-app.m -x none \
+-	  ios/Henge/Native/henge-tl.c $(filter-out %.m,$(TL_SRC)) host/jit_region.c -x objective-c -fobjc-arc tl/loader/tl_bundle.m tl/loader/tl_stubs.m -x none \
++	  ios/Henge/Native/henge-tl.c ios/Henge/Native/henge-tl-identity.c $(filter-out %.m,$(TL_SRC)) host/jit_region.c -x objective-c -fobjc-arc tl/loader/tl_bundle.m tl/loader/tl_stubs.m -x none \
+ 	  tl/build/shim/*.o tl/build/shim/hk_symbols.c -framework Foundation -framework QuartzCore -framework Metal -framework CoreGraphics \
+ 	  -framework CoreText -framework ImageIO -framework IOSurface -framework CoreVideo -framework UniformTypeIdentifiers \
+ 	  -lz -lbz2 -lcompression -o $@
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/DeviceRegion.swift work/ios/Henge/DeviceRegion.swift
+--- base/ios/Henge/DeviceRegion.swift	1970-01-01 08:00:00.000000000 +0800
++++ work/ios/Henge/DeviceRegion.swift	2026-11-26 02:54:03.348463823 +0800
+@@ -0,0 +1,72 @@
++import Foundation
++
++/// 这台机器是哪个地区卖的（国行 / 美版 / 港版……）。
++///
++/// 优先问 Apple 自己的 `MobileGestalt`（真实销售地区，`CH/A`、`LL/A` 这种），拿不到再退回系统地区设置。
++/// 只读，不改：转译运行的 Mac 应用问 `NSLocale` 时得到的也是真实地区，不会因为这里显示"国行"而被伪造。
++enum DeviceRegion {
++    /// 两个字母的地区码：CH、LL、ZP、J、KH……
++    static var code: String {
++        if let c = mobilGestalt("RegionCode"), !c.isEmpty { return c }
++        return Locale.current.region?.identifier ?? ""
++    }
++
++    /// 型号后缀里的那位（`CH/A` 的 CH），没有就返回 `code`。
++    static var salesCode: String {
++        if let m = mobilGestalt("ModelNumber"), let slash = m.firstIndex(of: "/") {
++            return String(m[..<slash])
++        }
++        return code
++    }
++
++    /// 一句人话：国行、美版、港版……
++    static var edition: String {
++        switch salesCode.uppercased() {
++        case "CH": return "国行"
++        case "LL": return "美版"
++        case "ZP", "ZA": return "港版"
++        case "ZQ", "ZE": return "澳门版"
++        case "J":  return "日版"
++        case "KH": return "韩版"
++        case "X", "XA": return "澳版"
++        case "B":  return "英版"
++        case "D":  return "德版"
++        case "F", "FD": return "法版"
++        case "C", "CL": return "加拿大版"
++        case "HN": return "印度版"
++        case "RU": return "俄版"
++        case "BR": return "巴西版"
++        case "MY": return "马来版"
++        case "TH": return "泰版"
++        case "VN": return "越版"
++        case "AE": return "阿联酋版"
++        case "SA": return "沙特版"
++        case "T", "TA": return "台版"
++        default:
++            let c = code.uppercased()
++            return c.isEmpty ? "未知" : c
++        }
++    }
++
++    /// 地区全名，给设置页显示。
++    static var regionName: String {
++        Locale.current.localizedString(forRegionCode: code) ?? code
++    }
++
++    /// 一行摘要：「国行 · 中国大陆 · CH」。
++    static var summary: String {
++        let parts = [edition, regionName, salesCode].filter { !$0.isEmpty }
++        return parts.joined(separator: " · ")
++    }
++
++    /// MobileGestalt 的字符串答案（私有 API；沙箱内可用，取不到就返回 nil）。
++    private static func mobilGestalt(_ key: String) -> String? {
++        guard let h = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY) else { return nil }
++        defer { dlclose(h) }
++        typealias MGCopyAnswerFunc = @convention(c) (CFString) -> Unmanaged<CFString>?
++        guard let sym = dlsym(h, "MGCopyAnswer") else { return nil }
++        let f = unsafeBitCast(sym, to: MGCopyAnswerFunc.self)
++        guard let v = f(key as CFString)?.takeRetainedValue() else { return nil }
++        return v as String
++    }
++}
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/HengeApp.swift work/ios/Henge/HengeApp.swift
+--- base/ios/Henge/HengeApp.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/HengeApp.swift	2026-11-26 02:43:25.630502126 +0800
+@@ -49,13 +49,13 @@
+         ZStack {
+             TabView(selection: $tab) {
+                 HomeView(running: $running, tab: $tab)
+-                    .tabItem { Label("Macs", systemImage: "macwindow") }
++                    .tabItem { Label("Mac", systemImage: "macwindow") }
+                     .tag(Tab.macs)
+                 InstallView()
+-                    .tabItem { Label("Install", systemImage: "arrow.down.circle") }
++                    .tabItem { Label("安装", systemImage: "arrow.down.circle") }
+                     .tag(Tab.install)
+                 SettingsView()
+-                    .tabItem { Label("Settings", systemImage: "gearshape") }
++                    .tabItem { Label("设置", systemImage: "gearshape") }
+                     .tag(Tab.settings)
+             }
+             .tint(Desk.accentLight)
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/HomeView.swift work/ios/Henge/HomeView.swift
+--- base/ios/Henge/HomeView.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/HomeView.swift	2026-11-26 02:55:47.038581280 +0800
+@@ -47,13 +47,13 @@
+             .toolbar {
+                 ToolbarItem(placement: .primaryAction) {
+                     Menu {
+-                        Button("Install macOS…") { tab = .install }
+-                        Button("Bring in a Mac from a computer…") { picking = true }
+-                        if macApps { Button("Mac Apps…") { showMacApps = true } }
++                        Button("安装 macOS…") { tab = .install }
++                        Button("从电脑导入 Mac…") { picking = true }
++                        if macApps { Button("Mac 应用…") { showMacApps = true } }
+                     } label: {
+                         Image(systemName: "plus")
+                     }
+-                    .accessibilityLabel("Add a Mac")
++                    .accessibilityLabel("添加 Mac")
+                 }
+             }
+             .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
+@@ -95,11 +95,11 @@
+                 .frame(maxWidth: .infinity)
+                 .frame(height: 190)
+                 .background(Desk.raised.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+-            Text("No Mac yet").font(.system(size: 24, weight: .bold))
+-            Text("Install macOS on this \(Device.name), or bring in a Mac made on a computer.")
++            Text("还没有 Mac").font(.system(size: 24, weight: .bold))
++            Text("在这台 \(Device.name) 上安装 macOS，或导入在电脑上做好的 Mac。")
+                 .font(.system(size: 15)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
+-            Button("Install macOS") { tab = .install }.buttonStyle(DeskButtonStyle())
+-            Button("Bring in a Mac") { picking = true }
++            Button("安装 macOS") { tab = .install }.buttonStyle(DeskButtonStyle())
++            Button("导入 Mac") { picking = true }
+                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+         }
+         .padding(14)
+@@ -109,7 +109,7 @@
+     @ViewBuilder private func others(besides shown: VirtualMac) -> some View {
+         let rest = machines.all.filter { $0.id != shown.id }
+         if !rest.isEmpty {
+-            DeskHeading("Other Macs")
++            DeskHeading("其他 Mac")
+             VStack(spacing: 0) {
+                 ForEach(rest) { other in
+                     Button { chosen = other.id } label: {
+@@ -139,9 +139,9 @@
+     }
+ 
+     var lastUsedText: String {
+-        guard let lastUsed else { return "Never" }
+-        if Calendar.current.isDateInToday(lastUsed) { return "Today" }
+-        if Calendar.current.isDateInYesterday(lastUsed) { return "Yesterday" }
++        guard let lastUsed else { return "从未" }
++        if Calendar.current.isDateInToday(lastUsed) { return "今天" }
++        if Calendar.current.isDateInYesterday(lastUsed) { return "昨天" }
+         return lastUsed.formatted(.dateTime.month(.abbreviated).day())
+     }
+ 
+@@ -180,7 +180,7 @@
+                     }
+                     .padding(.top, 15)
+                     .padding(.horizontal, 5)
+-                    Text("\(mac.summary) · \(cpus) CPUs")
++                    Text("\(mac.summary) · \(cpus) 核")
+                         .font(.system(size: 15))
+                         .foregroundStyle(Desk.dim)
+                         .frame(maxWidth: .infinity, alignment: .leading)
+@@ -192,9 +192,9 @@
+             if jitReady {
+                 Button(action: start) {
+                     if InstantResume.enabled && InstantResume.hasSave(for: mac) {
+-                        Label("Resume", systemImage: "play.fill")
++                        Label("继续", systemImage: "play.fill")
+                     } else {
+-                        Label("Start", systemImage: "play.fill")
++                        Label("启动", systemImage: "play.fill")
+                     }
+                 }
+                 .buttonStyle(DeskButtonStyle())
+@@ -206,7 +206,7 @@
+                         .padding(.horizontal, 5)
+                         .padding(.top, 10)
+                 }
+-                Button("Turn On JIT", action: turnOnJIT)
++                Button("开启 JIT", action: turnOnJIT)
+                     .buttonStyle(DeskButtonStyle())
+                     .padding(.top, 15)
+             }
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/Input.swift work/ios/Henge/Input.swift
+--- base/ios/Henge/Input.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/Input.swift	2026-11-26 02:45:06.986889244 +0800
+@@ -217,7 +217,7 @@
+                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                     .background(Desk.raised, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+             }
+-            .accessibilityLabel("Hide keyboard")
++            .accessibilityLabel("收起键盘")
+         }
+         .padding(.horizontal, 6)
+         .padding(.vertical, 6)
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/InstallView.swift work/ios/Henge/InstallView.swift
+--- base/ios/Henge/InstallView.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/InstallView.swift	2026-11-26 02:55:47.033039136 +0800
+@@ -24,7 +24,7 @@
+                     switch installer.phase {
+                     case .idle: chooser
+                     case .checking:
+-                        ProgressView("Preparing to install macOS…")
++                        ProgressView("正在准备安装 macOS…")
+                             .padding(20)
+                     case .downloading, .preparing, .installing: progress
+                     case .done(let text): finished(text)
+@@ -36,7 +36,7 @@
+                 .deskColumn()
+             }
+             .background(Desk.page)
+-            .navigationTitle(installer.busy ? "Installing" : "Install macOS")
++            .navigationTitle(installer.busy ? "正在安装" : "Install macOS")
+             .task {
+                 while !Task.isCancelled { // the region may be claimed after a hand-off to StikDebug
+                     jitReady = JITBootstrap.ready
+@@ -49,7 +49,7 @@
+     // MARK: Choosing
+ 
+     @ViewBuilder private var chooser: some View {
+-        DeskHeading("Version")
++        DeskHeading("版本")
+         VStack(spacing: 0) {
+             ForEach(MacOSRelease.all) { r in
+                 HStack(spacing: 0) {
+@@ -64,13 +64,13 @@
+                                 .contentShape(Rectangle())
+                         }
+                         .buttonStyle(.plain)
+-                        .accessibilityLabel("Delete the \(r.name) download")
++                        .accessibilityLabel("删除 \(r.name) 的下载")
+                         .padding(.trailing, 6)
+                     }
+                 }
+                     .contextMenu {
+                         if Installer.haveImage(r) || Installer.partSize(r) != nil {
+-                            Button("Delete Download", role: .destructive) { confirmDeleteDownload = r }
++                            Button("删除下载", role: .destructive) { confirmDeleteDownload = r }
+                         }
+                     }
+                 if r.id != MacOSRelease.all.last?.id { Rectangle().fill(Desk.hairline).frame(height: 0.5) }
+@@ -78,15 +78,15 @@
+         }
+         .deskCard()
+         .id(refresh)
+-        .confirmationDialog("Delete this download?", isPresented: Binding(get: { confirmDeleteDownload != nil }, set: { if !$0 { confirmDeleteDownload = nil } }),
++        .confirmationDialog("删除这个下载？", isPresented: Binding(get: { confirmDeleteDownload != nil }, set: { if !$0 { confirmDeleteDownload = nil } }),
+                             titleVisibility: .visible) {
+-            Button("Delete Download", role: .destructive) {
++            Button("删除下载", role: .destructive) {
+                 if let r = confirmDeleteDownload { Installer.deleteImage(r) }
+                 refresh += 1
+             }
+         }
+ 
+-        DeskHeading("New Mac")
++        DeskHeading("新建 Mac")
+         VStack(spacing: 0) {
+             TextField("Name", text: $name)
+                 .font(.system(size: 16))
+@@ -95,7 +95,7 @@
+             Rectangle().fill(Desk.hairline).frame(height: 0.5)
+             Stepper(value: $ramGB, in: Device.memoryChoices) {
+                 HStack {
+-                    Text("Memory").font(.system(size: 16))
++                    Text("内存").font(.system(size: 16))
+                     Spacer()
+                     Text("\(ramGB) GB").font(.system(size: 16, weight: .semibold))
+                 }
+@@ -111,28 +111,28 @@
+                     .padding(.bottom, 10)
+             }
+             Rectangle().fill(Desk.hairline).frame(height: 0.5)
+-            Toggle("Delete the download after", isOn: $deleteAfter)
++            Toggle("安装后删除下载", isOn: $deleteAfter)
+                 .font(.system(size: 16))
+                 .padding(.horizontal, 17)
+                 .padding(.vertical, 10)
+         }
+         .deskCard()
+ 
+-        Button(Installer.haveImage(release) ? "Install" : "Download and Install") {
++        Button(Installer.haveImage(release) ? "Install" : "下载并安装") {
+             installer.start(release, name: name.isEmpty ? "Mac" : name, ramMB: ramGB * 1024, cpus: cpus, keepImage: !deleteAfter)
+         }
+         .buttonStyle(DeskButtonStyle(enabled: jitReady && !Device.chipTooOld))
+         .disabled(!jitReady || Device.chipTooOld)
+         .padding(.top, 20)
+-        Text(Device.chipTooOld ? Device.chipTooOldText : jitReady ? "Keep Henge open and the \(Device.name) plugged in. Needs about \(ByteText.string(UInt64(Installer.spaceNeeded(release)))) free."
+-                                : JITBootstrap.lastFailure ?? "Turn on JIT first. \(jit.automaticDescription)")
++        Text(Device.chipTooOld ? Device.chipTooOldText : jitReady ? "保持 Henge 打开并插着电源。需要约 \(ByteText.string(UInt64(Installer.spaceNeeded(release)))) 可用空间。"
++                                : JITBootstrap.lastFailure ?? "请先开启 JIT。\(jit.automaticDescription)")
+             .font(.system(size: 13))
+             .foregroundStyle(Desk.dim)
+             .multilineTextAlignment(.center)
+             .padding(.top, 10)
+         if !jitReady && !Device.chipTooOld {
+             // Before any Mac exists, this is the only place to ask for JIT (#23).
+-            Button("Turn On JIT") { jit.enable() }
++            Button("开启 JIT") { jit.enable() }
+                 .buttonStyle(DeskButtonStyle())
+                 .padding(.top, 12)
+         }
+@@ -143,12 +143,12 @@
+             VStack(alignment: .leading, spacing: 2) {
+                 Text(r.name).font(.system(size: 16, weight: .medium)).foregroundStyle(Desk.text)
+                 if let size = Installer.imageSize(r) {
+-                    Text("Downloaded, \(ByteText.string(UInt64(size)))").font(.system(size: 13)).foregroundStyle(Desk.good)
++                    Text("已下载，\(ByteText.string(UInt64(size)))").font(.system(size: 13)).foregroundStyle(Desk.good)
+                 } else if let part = Installer.partSize(r) {
+-                    Text("\(ByteText.string(UInt64(part))) of \(ByteText.string(UInt64(r.bytes))) downloaded: goes on from there")
++                    Text("已下载 \(ByteText.string(UInt64(part)))／\(ByteText.string(UInt64(r.bytes)))，从断点继续")
+                         .font(.system(size: 13)).foregroundStyle(Desk.dim)
+                 } else {
+-                    Text("\(ByteText.string(UInt64(r.bytes))) download").font(.system(size: 13)).foregroundStyle(Desk.dim)
++                    Text("\(ByteText.string(UInt64(r.bytes))) 下载").font(.system(size: 13)).foregroundStyle(Desk.dim)
+                 }
+                 Text(r.note).font(.system(size: 13)).foregroundStyle(Desk.dim)
+             }
+@@ -162,7 +162,7 @@
+ 
+     // MARK: Going
+ 
+-    private static let stages = ["Download", "Start installer", "Write macOS", "Check macOS", "Finish"]
++    private static let stages = ["Download", "启动安装器", "写入 macOS", "校验 macOS", "Finish"]
+ 
+     private var stage: Int {
+         switch installer.phase {
+@@ -190,11 +190,11 @@
+         let elapsed = Date().timeIntervalSince(stageStarted)
+         guard stageSeen == stage, fraction > 0.03, fraction < 1, elapsed > 10 else { return nil }
+         let minutes = Int((elapsed / fraction * (1 - fraction) / 60).rounded(.up))
+-        return minutes <= 1 ? "About a minute left in this step" : "About \(minutes) minutes left in this step"
++        return minutes <= 1 ? "这一步还剩约一分钟" : "这一步还剩约 \(minutes) 分钟"
+     }
+ 
+     @ViewBuilder private var progress: some View {
+-        Text("\(release.name) on this \(Device.name). Keep Henge open.")
++        Text("在 \(release.name) 上安装到这台 \(Device.name)。请保持 Henge 打开。")
+             .font(.system(size: 16))
+             .foregroundStyle(Desk.dim)
+             .frame(maxWidth: .infinity, alignment: .leading)
+@@ -206,7 +206,7 @@
+                 Text("\(Int(fraction * 100))%")
+                     .font(.system(size: 66, weight: .bold))
+                     .monospacedDigit()
+-                Text(timeLeft ?? "Step \(stage + 1) of \(Self.stages.count)")
++                Text(timeLeft ?? "第 \(stage + 1) 步，共 \(Self.stages.count) 步")
+                     .font(.system(size: 15))
+                     .foregroundStyle(Desk.dim)
+                     .padding(.top, 2)
+@@ -227,7 +227,7 @@
+             stageStarted = Date()
+         }
+ 
+-        DeskHeading("Steps")
++        DeskHeading("步骤")
+         VStack(spacing: 0) {
+             ForEach(Array(Self.stages.enumerated()), id: \.offset) { i, title in
+                 HStack {
+@@ -248,7 +248,7 @@
+         }
+         .deskCard()
+ 
+-        Button(details ? "Hide details" : "Show details") { withAnimation { details.toggle() } }
++        Button(details ? "收起详情" : "显示详情") { withAnimation { details.toggle() } }
+             .font(.system(size: 15, weight: .semibold))
+             .foregroundStyle(Desk.accentLight)
+             .padding(.top, 14)
+@@ -270,7 +270,7 @@
+     private func finished(_ text: String) -> some View {
+         VStack(spacing: 14) {
+             Image(systemName: "checkmark.circle.fill").font(.system(size: 54)).foregroundStyle(Desk.good).padding(.top, 8)
+-            Text("Installed").font(.system(size: 24, weight: .bold))
++            Text("已安装").font(.system(size: 24, weight: .bold))
+             Text(text).font(.system(size: 15)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
+         }
+         .padding(20)
+@@ -281,16 +281,16 @@
+ 
+     @ViewBuilder private func failed(_ text: String) -> some View {
+         VStack(alignment: .leading, spacing: 10) {
+-            Text("It did not work").font(.system(size: 22, weight: .bold))
++            Text("没有成功").font(.system(size: 22, weight: .bold))
+             Text(text).font(.system(size: 15))
+-            Text("Quit Henge (swipe it away) and open it again before trying again: only one Mac can start per launch.")
++            Text("先退出 Henge（上滑划掉）再重新打开，然后再试：每次启动只能开一台 Mac。")
+                 .font(.system(size: 13)).foregroundStyle(Desk.dim)
+-            Button("Back") { installer.reset() }.buttonStyle(DeskButtonStyle()).padding(.top, 6)
++            Button("返回") { installer.reset() }.buttonStyle(DeskButtonStyle()).padding(.top, 6)
+         }
+         .padding(18)
+         .deskCard(radius: 30)
+         .padding(.top, 8)
+-        DeskHeading("Log")
++        DeskHeading("日志")
+         LogTail().padding(14).frame(maxWidth: .infinity, alignment: .leading).deskCard()
+     }
+ }
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/Installer.swift work/ios/Henge/Installer.swift
+--- base/ios/Henge/Installer.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/Installer.swift	2026-11-26 02:45:57.822897266 +0800
+@@ -19,19 +19,19 @@
+            but its GPU driver (protocol 0x1f) never starts WindowServer's GPU work under Henge yet: not offered until it does. */
+         MacOSRelease(id: "22G120", name: "macOS Ventura 13.6",
+                      url: URL(string: "https://updates.cdn-apple.com/2023FallFCS/fullrestores/042-55833/C0830847-A2F8-458F-B680-967991820931/UniversalMac_13.6_22G120_Restore.ipsw")!,
+-                     bytes: 12_297 << 20, note: "The smallest download (and about 35 GB in all), for devices short on storage.", macBytes: 23 << 30),
++                     bytes: 12_297 << 20, note: "下载量最小（总共约 35 GB），适合存储紧张的设备。", macBytes: 23 << 30),
+         MacOSRelease(id: "23G93", name: "macOS Sonoma 14.6.1",
+                      url: URL(string: "https://updates.cdn-apple.com/2024SummerFCS/fullrestores/062-52859/932E0A8F-6644-4759-82DA-F8FA8DEA806A/UniversalMac_14.6.1_23G93_Restore.ipsw")!,
+-                     bytes: 14_106 << 20, note: "A smaller download than Sequoia (and about 40 GB in all).", macBytes: 26 << 30),
++                     bytes: 14_106 << 20, note: "比 Sequoia 下载量小（总共约 40 GB）。", macBytes: 26 << 30),
+         MacOSRelease(id: "24G90", name: "macOS Sequoia 15.6.1",
+                      url: URL(string: "https://updates.cdn-apple.com/2025SummerFCS/fullrestores/093-10809/CFD6DD38-DAF0-40DA-854F-31AAD1294C6F/UniversalMac_15.6.1_24G90_Restore.ipsw")!,
+-                     bytes: 16_035 << 20, note: "Recommended: the version Henge is tested with."),
++                     bytes: 16_035 << 20, note: "推荐：Henge 测试所用的版本。"),
+         MacOSRelease(id: "25G83", name: "macOS Tahoe 26.6.2",
+                      url: URL(string: "https://updates.cdn-apple.com/2026SummerFCS/fullrestores/140-75212/A2A24B94-1FC1-45A3-93F7-C51B02AF1F4D/UniversalMac_26.6.2_25G83_Restore.ipsw")!,
+-                     bytes: 18_856 << 20, note: "Installs and runs on iPhone. Its first setup is slow: creating the account can take 10 minutes."),
++                     bytes: 18_856 << 20, note: "可在 iPhone 上安装并运行。首次设置很慢：创建账户可能要 10 分钟。"),
+         MacOSRelease(id: "26B123", name: "macOS 27.2",
+                      url: URL(string: "https://updates.cdn-apple.com/2026FallFCS/c9671975-52db-4fb5-9af2-00217169ba8d/UniversalMac_27.2_26B123_Restore.ipsw")!,
+-                     bytes: 24_409 << 20, note: "The newest. Installs and runs on iPhone, but it's the slowest here, and Safari's pages may stay blank."),
++                     bytes: 24_409 << 20, note: "最新的版本。可在 iPhone 上安装并运行，但在这里最慢，Safari 的页面可能一直是白的。"),
+     ]
+ 
+     /// Selected in the Install tab when nothing is downloaded yet: the one Henge is tested with most.
+@@ -73,7 +73,7 @@
+         }
+     }
+ 
+-    nonisolated static var imageDirectory: URL { Machines.root.appendingPathComponent("Restore images", isDirectory: true) }
++    nonisolated static var imageDirectory: URL { Machines.root.appendingPathComponent("恢复镜像", isDirectory: true) }
+     nonisolated static func imagePath(_ r: MacOSRelease) -> URL { imageDirectory.appendingPathComponent("\(r.id).ipsw") }
+ 
+     /// The size of the image on this iPhone, if a whole one is there (the listed sizes are rounded).
+@@ -113,7 +113,7 @@
+         phase = .checking
+         machineName = name
+         UIApplication.shared.isIdleTimerDisabled = true // the screen locking would suspend the download and the restore
+-        grace = UIApplication.shared.beginBackgroundTask(withName: "Henge install") {
++        grace = UIApplication.shared.beginBackgroundTask(withName: "Henge 安装") {
+             MainActor.assumeIsolated { Installer.shared.endGrace() }
+         }
+         Task {
+@@ -132,7 +132,7 @@
+                 try await install(mac, ipsw: ipsw, cpus: cpus)
+                 if !keepImage { try? FileManager.default.removeItem(at: ipsw) }
+                 HengeLog.log("install", "\(name): installed \(release.name)")
+-                phase = .done("\(release.name) is installed on \(name). Quit Henge (swipe it away) and open it again, then tap Start.")
++                phase = .done("\(release.name) 已安装到 \(name)。退出 Henge（上滑划掉）后重新打开，然后点「启动」。")
+             } catch {
+                 HengeLog.log("install", "failed: \(error.localizedDescription)")
+                 // A half-installed Mac is no use, and its disk can be many gigabytes. The download stays.
+@@ -147,7 +147,7 @@
+             .volumeAvailableCapacityForImportantUsage ?? 0
+         let needed = Self.spaceNeeded(r)
+         if free > 0 && free < needed {
+-            throw message("This install needs about \(ByteText.string(UInt64(needed))) free; this \(Device.name) has \(ByteText.string(UInt64(free))).")
++            throw message("这次安装需要约 \(ByteText.string(UInt64(needed))) 可用空间；这台 \(Device.name) 有 \(ByteText.string(UInt64(free)))。")
+         }
+     }
+ 
+@@ -187,7 +187,7 @@
+                 try await Task.sleep(nanoseconds: 3_000_000_000)
+             }
+         }
+-        throw message("The download kept failing.")
++        throw message("下载一直失败。")
+     }
+ 
+ 
+@@ -203,7 +203,7 @@
+         Machines.excludeFromBackup(Machines.root)
+         try? fm.removeItem(at: mac.rom)
+         try fm.copyItem(at: rom, to: mac.rom)
+-        guard fm.createFile(atPath: mac.disk.path, contents: nil) else { throw message("Cannot create the disk.") }
++        guard fm.createFile(atPath: mac.disk.path, contents: nil) else { throw message("无法创建磁盘。") }
+         let h = try FileHandle(forWritingTo: mac.disk)
+         try h.truncate(atOffset: UInt64(64) << 30) // sparse: blocks are only used as macOS writes them
+         try h.close()
+@@ -258,13 +258,13 @@
+ 
+     static func stepName(_ step: Int) -> String {
+         switch step {
+-        case 0: return "Finding the Mac"
+-        case 1: return "Starting the installer"
+-        case 2: return "Writing macOS"
+-        case 3: return "Checking macOS"
+-        case 4: return "Installing firmware"
+-        case 6, 7: return "Installing system files"
+-        default: return "Installing"
++        case 0: return "正在查找 Mac"
++        case 1: return "正在启动安装器"
++        case 2: return "正在写入 macOS"
++        case 3: return "正在校验 macOS"
++        case 4: return "正在安装固件"
++        case 6, 7: return "正在安装系统文件"
++        default: return "正在安装"
+         }
+     }
+ 
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/MacApps.swift work/ios/Henge/MacApps.swift
+--- base/ios/Henge/MacApps.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/MacApps.swift	2026-11-26 02:52:11.529756681 +0800
+@@ -40,20 +40,20 @@
+     var verdict: (title: String, detail: String) {
+         switch UInt32(kind) {
+         case HENGE_TL_PROGRAM.rawValue:
+-            return ("Runs without macOS (experimental)",
+-                    "A program without windows: Henge loads it into itself and runs it, with no Mac started.")
++            return ("无需 macOS 即可运行（实验性）",
++                    "无窗口的命令行程序：Henge 把它载入自身运行，不启动 Mac。")
+         case HENGE_TL_SWIFTUI.rawValue:
+-            return ("Not yet: a SwiftUI app",
+-                    "iOS has the SwiftUI it calls, but starting it as an app inside Henge isn't done yet. It runs in a Mac.")
++            return ("暂不支持：SwiftUI 应用",
++                    "iOS 有它调用的 SwiftUI，但在 Henge 里把它当作应用启动还没做完。它可以在 Mac 里跑。")
+         case HENGE_TL_CATALYST.rawValue:
+-            return ("Not yet: a Mac Catalyst app",
+-                    "It's built from an iPad app's code, so most of what it calls exists on iOS, but starting it inside Henge isn't done yet. It runs in a Mac.")
++            return ("暂不支持：Mac Catalyst 应用",
++                    "它由 iPad 应用的代码构建，调用的东西大多 iOS 上都有，但在 Henge 里启动它还没做完。它可以在 Mac 里跑。")
+         case HENGE_TL_APPKIT.rawValue:
+-            return ("Experimental: an AppKit app",
+-                    "It draws its windows with AppKit, which iOS doesn't have; Henge stands in its own. Made for browsers built on Chromium (Chromium, apps built with Electron or CEF); others may stop early.")
++            return ("实验性：AppKit 应用",
++                    "它用 AppKit 画窗口，而 iOS 没有 AppKit；Henge 自带了一套替代实现。主要针对 Chromium 系浏览器（Chromium、Electron 或 CEF 构建的应用）；其他应用可能中途停住。")
+         default:
+-            return ("Intel only",
+-                    "It has no Apple silicon code. A Mac with Rosetta runs it; Henge can't yet.")
++            return ("仅 Intel",
++                    "它没有 Apple 芯片的代码。装了 Rosetta 的 Mac 能跑；Henge 暂时不行。")
+         }
+     }
+ 
+@@ -148,12 +148,15 @@
+     @ObservedObject private var store = MacAppsStore.shared
+     @Environment(\.dismiss) private var dismiss
+     @State private var picking = false
++    @State private var chosen: Set<String> = []   // the paths picked to run together
++    @State private var together: [MacApp] = []
++    @State private var showDesktop = false
+ 
+     var body: some View {
+         NavigationStack {
+             ScrollView {
+                 VStack(spacing: 0) {
+-                    Text("Mac apps and programs run here through Henge's own translation layer, with no Mac started. Programs without windows run today; apps with windows are next. Experimental.")
++                    Text("Mac 应用和命令行程序在这里通过 Henge 自带的转译层运行，不启动 Mac。无窗口的程序现在就能跑；带窗口的应用仍属实验性，它们可以多个共用一块屏幕。")
+                         .font(.system(size: 14)).foregroundStyle(Desk.dim)
+                         .frame(maxWidth: .infinity, alignment: .leading)
+                         .padding(.horizontal, 4).padding(.bottom, 12)
+@@ -162,16 +165,41 @@
+                     if store.apps.isEmpty && store.busy == nil {
+                         VStack(spacing: 10) {
+                             Image(systemName: "shippingbox").font(.system(size: 34)).foregroundStyle(Desk.faint)
+-                            Text("Nothing here yet").font(.system(size: 17, weight: .semibold))
+-                            Text("Bring in a .dmg or an .app from Files, or try Henge's sample programs.")
++                            Text("这里还什么都没有").font(.system(size: 17, weight: .semibold))
++                            Text("从「文件」里导入 .dmg 或 .app，也可以先试试 Henge 的示例程序。")
+                                 .font(.system(size: 14)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
+                         }
+                         .padding(28).frame(maxWidth: .infinity).deskCard()
+                     }
+                     ForEach(store.apps) { app in
+-                        NavigationLink(value: app) { MacAppRow(app: app) }.buttonStyle(.plain).padding(.bottom, 10)
++                        HStack(spacing: 10) {
++                            NavigationLink(value: app) { MacAppRow(app: app) }.buttonStyle(.plain)
++                            if app.canOpenWindowed {
++                                Button {
++                                    if chosen.contains(app.id) { chosen.remove(app.id) }
++                                    else { chosen.insert(app.id) }
++                                } label: {
++                                    Image(systemName: chosen.contains(app.id) ? "checkmark.circle.fill" : "circle")
++                                        .font(.system(size: 20))
++                                        .foregroundStyle(chosen.contains(app.id) ? Desk.accent : Desk.faint)
++                                }
++                                .buttonStyle(.plain)
++                                .accessibilityLabel(chosen.contains(app.id) ? "Take \(app.name) out of the ones to open" : "Pick \(app.name) to open together")
++                            }
++                        }
++                        .padding(.bottom, 10)
++                    }
++                    if chosen.count >= 1 {
++                        Button(chosen.count == 1 ? "Open It on a Screen" : "Open \(chosen.count) Together on One Screen") {
++                            together = store.apps.filter { chosen.contains($0.id) }
++                            showDesktop = !together.isEmpty
++                        }
++                        .buttonStyle(DeskButtonStyle()).padding(.top, 8)
++                        Text("它们通过 Henge 的转译层在同一个进程里并排运行：一块屏幕、一条菜单栏（前台应用的那条），点某个窗口就会把它的应用提到前台。代码缓存必须装得下它们全部。")
++                            .font(.system(size: 13)).foregroundStyle(Desk.dim)
++                            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 10).padding(.horizontal, 4)
+                     }
+-                    Button("Add the Sample Programs") { store.addSamples() }
++                    Button("添加示例程序") { store.addSamples() }
+                         .buttonStyle(DeskButtonStyle()).padding(.top, 8)
+                 }
+                 .padding(.horizontal, 16).padding(.vertical, 12).deskColumn()
+@@ -180,15 +208,18 @@
+             .navigationTitle("Mac Apps")
+             .navigationDestination(for: MacApp.self) { MacAppRunView(app: $0) }
+             .toolbar {
+-                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
++                ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
+                 ToolbarItem(placement: .primaryAction) {
+-                    Button { picking = true } label: { Image(systemName: "plus") }.accessibilityLabel("Bring in a Mac app")
++                    Button { picking = true } label: { Image(systemName: "plus") }.accessibilityLabel("导入 Mac 应用")
+                 }
+             }
+             .fileImporter(isPresented: $picking, allowedContentTypes: [.diskImage, .applicationBundle, .folder, .unixExecutable, .data]) { result in
+                 if case let .success(url) = result { store.bring(in: url) }
+             }
+             .onAppear { store.reload() }
++            .fullScreenCover(isPresented: $showDesktop, onDismiss: { chosen.removeAll() }) {
++                MacDesktopScreen(apps: together)
++            }
+         }
+     }
+ }
+@@ -219,6 +250,7 @@
+     @State private var result: String?
+     @State private var confirmDelete = false
+     @State private var showScreen = false
++    @State private var showTerminal = false
+ 
+     var body: some View {
+         ScrollView {
+@@ -229,23 +261,23 @@
+                 }
+                 .frame(maxWidth: .infinity, alignment: .leading).padding(17).deskCard()
+ 
+-                DeskHeading("About")
++                DeskHeading("关于")
+                 VStack(alignment: .leading, spacing: 6) {
+-                    if !app.identifier.isEmpty { LabeledContent("Identifier", value: app.identifier) }
+-                    LabeledContent("Code", value: [app.arm64 ? "Apple silicon" : nil, app.intel ? "Intel" : nil].compactMap { $0 }.joined(separator: " and "))
+-                    if !app.minMacOS.isEmpty { LabeledContent("Needs macOS", value: app.minMacOS + " or later") }
++                    if !app.identifier.isEmpty { LabeledContent("标识符", value: app.identifier) }
++                    LabeledContent("代码架构", value: [app.arm64 ? "Apple 芯片" : nil, app.intel ? "Intel" : nil].compactMap { $0 }.joined(separator: " and "))
++                    if !app.minMacOS.isEmpty { LabeledContent("需要 macOS", value: app.minMacOS + " or later") }
+                 }
+                 .font(.system(size: 15)).padding(17).deskCard()
+ 
+                 if app.canRun {
+                     Button(running ? "Running…" : "Run") { run() }
+                         .buttonStyle(DeskButtonStyle()).disabled(running || (result == nil && henge_tl_ran_program() != 0)).padding(.top, 16)
+-                    Text("Programs run inside Henge, one per launch. After one has run, quit Henge and open it again to run another or to start a Mac.")
++                    Text("程序在 Henge 内部运行，每次启动跑一个。跑过一个之后，要跑别的或开 Mac，请退出 Henge 再打开。")
+                         .font(.system(size: 13)).foregroundStyle(Desk.dim).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+                     if result != nil || !output.isEmpty {
+-                        DeskHeading("Output")
++                        DeskHeading("输出")
+                         VStack(alignment: .leading, spacing: 8) {
+-                            Text(output.isEmpty ? "(nothing printed)" : output)
++                            Text(output.isEmpty ? "（没有输出）" : output)
+                                 .font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                                 .frame(maxWidth: .infinity, alignment: .leading)
+                             if let result { Text(result).font(.system(size: 13, weight: .semibold)).foregroundStyle(Desk.dim) }
+@@ -253,21 +285,29 @@
+                         .padding(17).deskCard()
+                     }
+                 }
++                if app.canRun {
++                    Button("在终端里打开（实验性）") { showTerminal = true }
++                        .buttonStyle(DeskButtonStyle()).disabled(henge_tl_ran_program() != 0).padding(.top, 10)
++                    Text("给它一条真终端：能输入、能显示全屏界面，适合 Codex CLI 这类命令行工具。一次启动只能跑一个程序。")
++                        .font(.system(size: 13)).foregroundStyle(Desk.dim)
++                        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
++                }
+                 if app.canOpenWindowed {
+-                    Button("Open (experimental)") { showScreen = true }
++                    Button("打开（实验性）") { showScreen = true }
+                         .buttonStyle(DeskButtonStyle()).disabled(henge_tl_ran_program() != 0).padding(.top, 16)
+-                    Text("It runs inside Henge, one app per launch, without a Mac. Tap to click, scroll with one finger, drag with two, hold for a right click; the keyboard button brings up the keyboard. Quit Henge (swipe it away) to stop it.")
++                    Text("它在 Henge 内部运行，每次启动一个应用，不需要 Mac。点一下是单击，单指滑动是滚动，双指拖动是拖拽，长按是右键；键盘按钮调出键盘。要停止它就退出 Henge（上滑划掉）。")
+                         .font(.system(size: 13)).foregroundStyle(Desk.dim).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+                 }
+-                Button("Delete", role: .destructive) { confirmDelete = true }.padding(.top, 24)
++                Button("删除", role: .destructive) { confirmDelete = true }.padding(.top, 24)
+             }
+             .padding(.horizontal, 16).padding(.vertical, 12).deskColumn()
+         }
+         .background(Desk.page)
+         .navigationTitle(app.name)
+         .fullScreenCover(isPresented: $showScreen) { MacAppScreen(app: app) }
++        .fullScreenCover(isPresented: $showTerminal) { MacTerminalScreen(app: app) }
+         .confirmationDialog("Delete \(app.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
+-            Button("Delete", role: .destructive) { store.delete(app); dismiss() }
++            Button("删除", role: .destructive) { store.delete(app); dismiss() }
+         }
+     }
+ 
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/MacDesktop.swift work/ios/Henge/MacDesktop.swift
+--- base/ios/Henge/MacDesktop.swift	1970-01-01 08:00:00.000000000 +0800
++++ work/ios/Henge/MacDesktop.swift	2026-11-26 02:54:21.079499899 +0800
+@@ -0,0 +1,510 @@
++import SwiftUI
++import UIKit
++
++/// Several Mac apps on one screen, at once, through Henge's translation layer (experimental).
++///
++/// Each app is a namespace of the loader (henge_tl_app_add), so its globals and its libraries stay its own; they share
++/// this process, so they share one NSApplication and one menu bar. Every app's windows are drawn on one stage, in the
++/// app's own coordinates: a click goes to whichever window is under it, and the window's app becomes the front one
++/// (its menu bar takes the bar, as a Mac's does).
++///
++/// The screen the apps see is this view's size, in points, at a scale of 1 or 2, and never more than the device's own
++/// screen: the stage is scaled to fit, so shrinking the screen shrinks what each app thinks it has to draw on. An app
++/// lays out again when that changes, as a Mac does when its display is resized.
++final class MacDesktopUIView: UIView, UIKeyInput {
++    private let stage = CALayer()
++    private var holders: [Int: CALayer] = [:] // app namespace -> the layer its windows are put in
++    private var pump: CADisplayLink?
++    private var cursor = CGPoint.zero
++    private let arrow = CAShapeLayer()
++
++    /// The apps on this desktop, in the order they were opened.
++    private(set) var apps: [MacApp] = []
++    /// The app whose menus are in the bar.
++    private(set) var active: Int = 0
++    /// The screen given to the apps, in points.
++    private(set) var screen = CGSize(width: 1180, height: 680)
++    private(set) var scale: CGFloat = 2
++
++    /// How much of the room there is the apps get: 1 is all of it, below 1 gives them a smaller screen to draw on (less
++    /// work, and everything drawn larger). It never goes past the device's own panel either way.
++    var density: Double {
++        get { MacRuntime.effectiveDensity }
++        set {
++            MacScreenSize.density = newValue
++            fitScreen()
++        }
++    }
++
++    /// Touch works the pointer where the finger lands; trackpad moves it with the fingers, as on a Mac's pad.
++    var trackpad = UserDefaults.standard.object(forKey: MacScreenUIView.trackpadKey) as? Bool ?? true
++
++    override init(frame: CGRect) {
++        super.init(frame: frame)
++        backgroundColor = UIColor(white: 0.08, alpha: 1)
++        isMultipleTouchEnabled = true
++        stage.anchorPoint = .zero
++        stage.isGeometryFlipped = true // the Mac's way up: the origin at the bottom left
++        stage.masksToBounds = true
++        stage.backgroundColor = UIColor(white: 0.16, alpha: 1).cgColor
++        layer.addSublayer(stage)
++        arrow.path = MacDesktopUIView.arrowPath()
++        arrow.fillColor = UIColor.white.cgColor
++        arrow.strokeColor = UIColor.black.withAlphaComponent(0.55).cgColor
++        arrow.lineWidth = 1
++        arrow.isHidden = true
++        layer.addSublayer(arrow)
++
++        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
++        let twoTap = UITapGestureRecognizer(target: self, action: #selector(rightTapped(_:)))
++        twoTap.numberOfTouchesRequired = 2
++        let long = UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:)))
++        let pan = UIPanGestureRecognizer(target: self, action: #selector(dragged(_:)))
++        pan.maximumNumberOfTouches = 1
++        let twoPan = UIPanGestureRecognizer(target: self, action: #selector(scrolled(_:)))
++        twoPan.minimumNumberOfTouches = 2
++        twoPan.maximumNumberOfTouches = 2
++        for g in [tap, twoTap, long, pan, twoPan] as [UIGestureRecognizer] {
++            g.delegate = self
++            addGestureRecognizer(g)
++        }
++    }
++
++    required init?(coder: NSCoder) { fatalError("not used") }
++
++    // MARK: - apps
++
++    /// Loads one more app beside the ones already here. nil on success, or a reason. Loading happens off the main
++    /// thread (a big app takes seconds); what it builds is put on the stage when it is done.
++    @MainActor
++    func add(_ app: MacApp) async -> String? {
++        if let why = MacMemoryGuard.whyCannotOpenAnother(openCount: Int(henge_tl_app_count())) {
++            HengeLog.log("macdesktop", "不开 \(app.name)：\(why)")
++            return why
++        }
++        MacMemoryGuard.logBeforeOpen(app.name)
++        let path = app.url.path
++        let loaded: (Int32, String) = await Task.detached(priority: .userInitiated) {
++            var e = [CChar](repeating: 0, count: 512)
++            let n = henge_tl_app_add(path, &e, e.count)
++            return (n, String(cString: e))
++        }.value
++        let (ns, reason) = loaded
++        guard ns >= 0 else {
++            HengeLog.log("macdesktop", "could not load \(app.name): \(reason)")
++            return reason.isEmpty ? "could not load it" : reason
++        }
++        apps.append(app)
++        fitScreen()
++        makeFront(Int(ns))
++        HengeLog.log("macdesktop", "\(app.name) is app \(ns) of \(henge_tl_app_count())")
++        // The C side logs when an app's main returns; a closure that captured ns could not be a C function pointer.
++        henge_tl_app_run_soon_ns(ns, nil)
++        return nil
++    }
++
++    func makeFront(_ ns: Int) {
++        active = ns
++        henge_tl_app_set_active(Int32(ns))
++        refresh()
++    }
++
++    // MARK: - the screen
++
++    override func layoutSubviews() {
++        super.layoutSubviews()
++        fitScreen()
++        placeStage()
++    }
++
++    private func placeStage() {
++        guard screen.width > 0, screen.height > 0 else { return }
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        stage.bounds = CGRect(origin: .zero, size: screen)
++        stage.position = CGPoint(x: bounds.midX, y: bounds.midY)
++        // The apps draw on `screen` points; this is what makes it fit whatever room there is.
++        let k = min(bounds.width / screen.width, bounds.height / screen.height)
++        stage.transform = CATransform3DMakeScale(k, k, 1)
++        CATransaction.commit()
++        refresh()
++    }
++
++    /// Gives the apps the room this view has, in points, at the device's scale, scaled by `density`, and never more
++    /// than the device's own panel. Called when the view is laid out and when the setting changes.
++    func fitScreen() {
++        guard bounds.width > 1, bounds.height > 1 else { return }
++        let (size, s) = MacScreenSize.fit(room: bounds.size, density: density)
++        guard size != screen || s != scale else { return }
++        screen = size
++        scale = s
++        HengeLog.log("macdesktop", "screen \(Int(size.width))x\(Int(size.height)) at \(s)x, \(apps.count) app(s)")
++        henge_tl_app_set_screen(size.width, size.height, s)
++        placeStage()
++    }
++
++    // MARK: - drawing
++
++    /// Puts every app's windows at their place, back to front, above the windows of the app that was opened first.
++    func refresh() {
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        let total = Int(henge_tl_app_window_count())
++        var seen = Set<ObjectIdentifier>()
++        for i in 0..<total {
++            guard let raw = henge_tl_app_window_layer(Int32(i)) else { continue }
++            let root = Unmanaged<CALayer>.fromOpaque(raw).takeUnretainedValue()
++            var x = 0.0, y = 0.0, w = 0.0, h = 0.0
++            guard henge_tl_app_window_frame(Int32(i), &x, &y, &w, &h) == 0 else { continue }
++            let ns = Int(henge_tl_app_window_ns(Int32(i)))
++            let holder: CALayer
++            if let h = holders[ns] {
++                holder = h
++            } else {
++                holder = CALayer()
++                holder.anchorPoint = .zero
++                holder.isGeometryFlipped = true
++                stage.addSublayer(holder)
++                holders[ns] = holder
++            }
++            if root.superlayer !== holder {
++                root.removeFromSuperlayer()
++                holder.addSublayer(root)
++            }
++            holder.frame = CGRect(x: x, y: y, width: w, height: h)
++            seen.insert(ObjectIdentifier(holder))
++        }
++        for (ns, h) in holders where !seen.contains(ObjectIdentifier(h)) { h.removeFromSuperlayer(); holders[ns] = nil }
++        // The front app's windows above the others.
++        if let front = holders[active] { front.zPosition = 1 }
++        for (ns, h) in holders where ns != active { h.zPosition = 0 }
++        CATransaction.commit()
++    }
++
++    // MARK: - input
++
++    /// A point in this view to the apps' screen (points, origin at the bottom left).
++    private func mac(_ p: CGPoint) -> CGPoint {
++        let k = stage.transform.m11
++        guard k > 0 else { return .zero }
++        return CGPoint(x: (p.x - stage.position.x) / k + screen.width / 2,
++                       y: (p.y - stage.position.y) / k + screen.height / 2)
++    }
++
++    private func moveCursor(to p: CGPoint) {
++        cursor = p
++        arrow.isHidden = false
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        arrow.path = MacDesktopUIView.arrowPath()
++        arrow.position = stage.convert(p, to: layer)
++        CATransaction.commit()
++    }
++
++    private static func arrowPath() -> CGPath {
++        let p = UIBezierPath()
++        p.move(to: .zero)
++        p.addLine(to: CGPoint(x: 0, y: 17))
++        p.addLine(to: CGPoint(x: 4.5, y: 13))
++        p.addLine(to: CGPoint(x: 7.5, y: 19.5))
++        p.addLine(to: CGPoint(x: 10, y: 18.4))
++        p.addLine(to: CGPoint(x: 7.2, y: 12))
++        p.addLine(to: CGPoint(x: 12.5, y: 12))
++        p.close()
++        return p.cgPath
++    }
++
++    private func mouse(_ type: Int32, _ p: CGPoint, clicks: Int32 = 1, flags: UInt = 0) {
++        let q = mac(p)
++        moveCursor(to: q)
++        henge_tl_app_mouse(type, q.x, q.y, clicks, flags)
++    }
++
++    /// Which app is under a point, so a click makes it the front one.
++    private func front(_ p: CGPoint) {
++        let q = mac(p)
++        let n = Int(henge_tl_app_window_count())
++        for i in (0..<max(0, n)).reversed() {
++            var x = 0.0, y = 0.0, w = 0.0, h = 0.0
++            guard henge_tl_app_window_frame(Int32(i), &x, &y, &w, &h) == 0 else { continue }
++            if q.x >= x, q.x < x + w, q.y >= y, q.y < y + h {
++                let ns = Int(henge_tl_app_window_ns(Int32(i)))
++                if ns != active, ns >= 0 { makeFront(ns) }
++                return
++            }
++        }
++    }
++
++    @objc private func tapped(_ g: UITapGestureRecognizer) {
++        let p = g.location(in: self)
++        front(p)
++        mouse(5, p, clicks: 0)
++        mouse(1, p)
++        mouse(2, p)
++    }
++
++    @objc private func rightTapped(_ g: UITapGestureRecognizer) {
++        let p = g.location(in: self)
++        front(p)
++        mouse(5, p, clicks: 0)
++        mouse(3, p)
++        mouse(4, p)
++    }
++
++    @objc private func pressed(_ g: UILongPressGestureRecognizer) {
++        let p = g.location(in: self)
++        switch g.state {
++        case .began: front(p); mouse(5, p, clicks: 0); mouse(1, p)
++        case .ended: mouse(2, p)
++        default: break
++        }
++    }
++
++    @objc private func dragged(_ g: UIPanGestureRecognizer) {
++        let p = g.location(in: self)
++        switch g.state {
++        case .began: mouse(5, p, clicks: 0); mouse(1, p)
++        case .changed: mouse(6, p)
++        case .ended, .cancelled: mouse(2, p)
++        default: break
++        }
++    }
++
++    @objc private func scrolled(_ g: UIPanGestureRecognizer) {
++        guard trackpad else { return }
++        let d = g.translation(in: self)
++        let p = g.location(in: self)
++        switch g.state {
++        case .began: break
++        case .changed:
++            let k = stage.transform.m11 > 0 ? stage.transform.m11 : 1
++            henge_tl_app_scroll(mac(p).x, mac(p).y, -d.x / k, d.y / k, 1)
++            g.setTranslation(.zero, in: self)
++        case .ended, .cancelled: henge_tl_app_scroll(mac(p).x, mac(p).y, 0, 0, 4)
++        default: break
++        }
++    }
++
++    // MARK: - the event loop
++
++    func start() {
++        pump?.invalidate()
++        let l = CADisplayLink(target: self, selector: #selector(tick))
++        // 每秒泵几次事件由设置和热状态决定：Mac 应用的画面是 CPU 画出来的，帧率直接等于发热。
++        l.preferredFramesPerSecond = MacRuntime.effectiveFPS
++        l.add(to: .main, forMode: .common)
++        pump = l
++        thermalObserver = MacRuntime.watchThermal { [weak self] in self?.applyThrottle() }
++        applyThrottle()
++    }
++
++    /// 热状态或设置变了：重设帧率与密度（应用会收到屏幕变化通知并重新布局）。
++    func applyThrottle() {
++        pump?.preferredFramesPerSecond = MacRuntime.effectiveFPS
++        fitScreen()
++    }
++
++    func stop() {
++        pump?.invalidate()
++        pump = nil
++        if let o = thermalObserver { NotificationCenter.default.removeObserver(o); thermalObserver = nil }
++    }
++
++    @objc private func tick() {
++        // One event a frame at most: the apps' own timers and animations run on this thread's run loop on the way.
++        // The pump runs a nested run loop, which can call this again: the guard stops that from recursing.
++        guard !pumping else { return }
++        pumping = true
++        _ = henge_tl_app_pump(0)
++        pumping = false
++        refresh()
++    }
++    private var pumping = false
++    private var thermalObserver: NSObjectProtocol?
++
++    // MARK: - keyboard
++
++    var hasText: Bool { true }
++    var autocorrectionType: UITextAutocorrectionType { .no }
++    var autocapitalizationType: UITextAutocapitalizationType { .none }
++    var keyboardType: UIKeyboardType { .asciiCapable }
++
++    func insertText(_ text: String) {
++        let flags: UInt = text.count == 1 && text.first.map { $0.isUppercase } == true ? 0x20000 : 0
++        henge_tl_app_key(1, 0, text, flags)
++        henge_tl_app_key(0, 0, text, flags)
++    }
++
++    func deleteBackward() {
++        henge_tl_app_key(1, 51, "\u{7f}", 0) // Delete
++        henge_tl_app_key(0, 51, "\u{7f}", 0)
++    }
++
++    override var canBecomeFirstResponder: Bool { true }
++}
++
++extension MacDesktopUIView: UIGestureRecognizerDelegate {
++    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
++        false
++    }
++}
++
++/// The shell: the stage, a bar with the apps that are open (tap one to bring it to the front), and the resolution menu.
++struct MacDesktopScreen: View {
++    let apps: [MacApp]
++    @Environment(\.dismiss) private var dismiss
++    @State private var status = "Opening…"
++    @State private var opened = false
++    @State private var density = MacScreenSize.density
++    @State private var front = 0
++    @State private var names: [String] = []
++    @State private var memTokens: [NSObjectProtocol] = []
++    @State private var trackpad = UserDefaults.standard.object(forKey: MacScreenUIView.trackpadKey) as? Bool ?? true
++
++    var body: some View {
++        ZStack(alignment: .topLeading) {
++            MacDesktopRepresentable(density: density)
++                .ignoresSafeArea()
++            VStack(alignment: .leading, spacing: 8) {
++                HStack(spacing: 8) {
++                    Button { dismiss() } label: {
++                        Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
++                            .foregroundStyle(.white.opacity(0.9)).frame(width: 34, height: 34)
++                            .background(.black.opacity(0.45), in: Circle())
++                    }
++                    if !status.isEmpty {
++                        Text(status).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.85))
++                            .padding(.horizontal, 10).padding(.vertical, 6).background(.black.opacity(0.45), in: Capsule())
++                    }
++                    Spacer()
++                    Button {
++                        trackpad.toggle()
++                        MacDesktopHub.shared.view?.trackpad = trackpad
++                        UserDefaults.standard.set(trackpad, forKey: MacScreenUIView.trackpadKey)
++                    } label: {
++                        Image(systemName: trackpad ? "cursorarrow" : "hand.point.up.left").font(.system(size: 15))
++                            .foregroundStyle(.white.opacity(0.9)).frame(width: 34, height: 34)
++                            .background(.black.opacity(0.45), in: Circle())
++                    }
++                    Menu {
++                        Section("屏幕密度") {
++                            ForEach([("整个屏幕", 1.0), ("四分之三", 0.75), ("一半", 0.5)], id: \.0) { name, d in
++                                Button(name) { density = d; MacScreenSize.density = d }
++                            }
++                        }
++                        Section("帧率") {
++                            ForEach([("60 帧", 60), ("30 帧", 30), ("20 帧", 20)], id: \.1) { name, f in
++                                Button(name) { MacRuntime.fps = f; MacDesktopHub.shared.view?.applyThrottle() }
++                            }
++                        }
++                    } label: {
++                        Image(systemName: "rectangle.compress.vertical").font(.system(size: 15))
++                            .foregroundStyle(.white.opacity(0.9)).frame(width: 34, height: 34)
++                            .background(.black.opacity(0.45), in: Circle())
++                    }
++                }
++                if names.count > 1 {
++                    // The apps open here, front one marked: tap one to bring it to the front (its menu bar).
++                    HStack(spacing: 6) {
++                        ForEach(Array(names.enumerated()), id: \.offset) { i, name in
++                            Button {
++                                front = i
++                                MacDesktopHub.shared.view?.makeFront(i)
++                            } label: {
++                                Text(name).font(.system(size: 11, weight: .semibold))
++                                    .foregroundStyle(i == front ? .black : .white.opacity(0.9))
++                                    .padding(.horizontal, 9).padding(.vertical, 5)
++                                    .background(i == front ? Color.white.opacity(0.9) : Color.black.opacity(0.45), in: Capsule())
++                            }
++                        }
++                    }
++                }
++            }
++            .padding(12)
++        }
++        .statusBarHidden()
++        .task { await start() }
++        .onDisappear { memTokens.forEach { NotificationCenter.default.removeObserver($0) }; memTokens = [] }
++    }
++
++    private func start() async {
++        guard !opened else { return }
++        opened = true
++        var failed = 0
++        guard let view = MacDesktopHub.shared.view else { status = "No desktop"; return }
++        // Side by side: no app owns the main thread's run loop; the desktop pumps it for all of them.
++        henge_tl_app_set_multi(1)
++        // 内存吃紧时主动让步：降密度、降帧，而不是等 iOS 把整个 Henge 杀掉。
++        memTokens = MacMemoryGuard.watch { msg in
++            if MacMemoryGuard.shouldRelax() {
++                MacScreenSize.density = min(MacScreenSize.density, 0.75)
++                MacRuntime.fps = min(MacRuntime.fps, 20)
++                MacDesktopHub.shared.view?.applyThrottle()
++            }
++            status = msg
++        }
++        for app in apps {
++            if henge_tl_app_count() >= Int32(MacRuntime.maxApps) {
++                failed += 1
++                status = "最多同时开 \(MacRuntime.maxApps) 个应用（可在设置里调）"
++                break
++            }
++            status = "正在打开 \(app.name)…"
++            if let reason = await view.add(app) {
++                failed += 1
++                status = "\(app.name): \(reason)"
++                try? await Task.sleep(nanoseconds: 1_500_000_000)
++            }
++            names = apps.filter { view.apps.contains($0) }.map(\.name)
++        }
++        status = failed == 0 ? "" : "\(failed) could not open"
++        view.start()
++        try? await Task.sleep(nanoseconds: 3_000_000_000)
++        if failed == 0 { status = "" }
++    }
++}
++
++/// The desktop view, as SwiftUI shows it.
++struct MacDesktopRepresentable: UIViewRepresentable {
++    let density: Double
++    func makeUIView(context: Context) -> MacDesktopUIView {
++        let v = MacDesktopUIView()
++        v.density = density
++        MacDesktopHub.shared.view = v
++        return v
++    }
++    func updateUIView(_ v: MacDesktopUIView, context: Context) {
++        if v.density != density { v.density = density }
++        v.refresh()
++    }
++    static func dismantleUIView(_ v: MacDesktopUIView, coordinator: ()) { v.stop() }
++}
++
++@MainActor
++final class MacDesktopHub {
++    static let shared = MacDesktopHub()
++    weak var view: MacDesktopUIView?
++}
++
++/// The screen a Mac app is given: the room there is (the view's size in points), scaled by a density the user picks,
++/// at 2x at most (the apps draw in software), and never more than the device's own panel in pixels.
++enum MacScreenSize {
++    static let key = "henge.macapps.density"
++    static var density: Double {
++        get { let v = UserDefaults.standard.object(forKey: key) as? Double ?? 1; return min(max(v, 0.5), 1) }
++        set { UserDefaults.standard.set(min(max(newValue, 0.5), 1), forKey: key) }
++    }
++
++    /// (points the app gets, its backing scale). Widths and heights are even numbers: a window at half a point would
++    /// be drawn on half a pixel.
++    static func fit(room: CGSize, density: Double) -> (CGSize, CGFloat) {
++        let panel = UIScreen.main.nativeBounds.size                 // in pixels
++        let s = min(max(UIScreen.main.scale, 1), 2)                 // 2x at most
++        let most = CGSize(width: panel.width / s, height: panel.height / s)
++        let d = min(max(density, 0.5), 1)
++        let w = min(room.width, most.width) * d
++        let h = min(room.height, most.height) * d
++        let even = { (v: CGFloat) in max(320, (v / 2).rounded(.down) * 2) }
++        return (CGSize(width: even(w), height: even(h)), s)
++    }
++}
+\ No newline at end of file
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/MacMemoryGuard.swift work/ios/Henge/MacMemoryGuard.swift
+--- base/ios/Henge/MacMemoryGuard.swift	1970-01-01 08:00:00.000000000 +0800
++++ work/ios/Henge/MacMemoryGuard.swift	2026-11-26 02:54:11.979626014 +0800
+@@ -0,0 +1,71 @@
++import Foundation
++import UIKit
++
++/// 内存看门狗：iOS 不会跟你商量，物理内存吃紧就直接 SIGKILL 整个进程，没有回调。
++///
++/// 所以这里做两件事：
++/// 1. **事前拒绝**：开新应用前先看还剩多少可用内存，不够就不开，给出人话提示，而不是让系统把 Henge 杀掉。
++/// 2. **事中让步**：收到内存警告、或可用内存跌破警戒线时，主动降屏幕密度、降帧率、停止后台应用的刷新，
++///    把内存还给系统。这不能阻止被杀，但能把被杀的门槛推后很多。
++///
++/// `henge_available_memory()` 是 `os_proc_available_memory()` 的封装：iOS 认为这个进程还能用多少，
++/// 比 `physicalMemory - used` 准，因为它算进了 jetsam 给 App 的额度。
++enum MacMemoryGuard {
++    /// 低于这个数就不再开新应用（MB）。留 600 MB 给 iOS 弹键盘、拍照、收通知。
++    static let reserveMB = 600
++    /// 跌破这个数就降密度（MB）。
++    static let lowWaterMB = 900
++
++    static var availableMB: Int { Int(henge_available_memory() >> 20) }
++
++    /// 还能不能再开一个：nil 表示可以，否则是不能的理由。
++    static func whyCannotOpenAnother(openCount: Int) -> String? {
++        if openCount >= MacRuntime.maxApps {
++            return "最多同时开 \(MacRuntime.maxApps) 个应用，可以在设置里调高。"
++        }
++        let mb = availableMB
++        if mb < lowWaterMB {
++            return "可用内存只剩 \(mb) MB，再开一个会把 Henge 一起拖死。先关掉一些应用再试。"
++        }
++        // 一个中等 AppKit 应用启动时峰值约 200–400 MB。
++        if mb < reserveMB + 300 {
++            return "可用内存只剩 \(mb) MB，不够再开一个应用了。"
++        }
++        return nil
++    }
++
++    /// 现在该不该降一档（可用内存偏低，或系统刚发过内存警告）。
++    @MainActor
++    static func shouldRelax() -> Bool {
++        availableMB < lowWaterMB || warnedRecently
++    }
++
++    private static var warnedRecently = false
++    private static var lastWarn: Date = .distantPast
++
++    /// 开始盯内存。`onRelax` 在需要让步时调用（宿主把它接到降密度上）。
++    @MainActor
++    static func watch(onRelax: @escaping (String) -> Void) -> [NSObjectProtocol] {
++        var tokens: [NSObjectProtocol] = []
++        let c = NotificationCenter.default
++        tokens.append(c.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
++                                   object: nil, queue: .main) { _ in
++            warnedRecently = true
++            lastWarn = Date()
++            HengeLog.log("memguard", "内存警告，可用 \(availableMB) MB")
++            onRelax("系统内存吃紧，已自动降低画面精度")
++            // 五分钟后警告的影响消退。
++            DispatchQueue.main.asyncAfter(deadline: .now() + 300) { warnedRecently = false }
++        })
++        tokens.append(c.addObserver(forName: UIApplication.didEnterBackgroundNotification,
++                                   object: nil, queue: .main) { _ in
++            HengeLog.log("memguard", "进入后台，可用 \(availableMB) MB")
++        })
++        return tokens
++    }
++
++    /// 每次开新应用前打一行，出事时好回溯。
++    static func logBeforeOpen(_ name: String) {
++        HengeLog.log("memguard", "准备打开 \(name)：可用 \(availableMB) MB，已开 \(henge_tl_app_count()) 个")
++    }
++}
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/MacRuntime.swift work/ios/Henge/MacRuntime.swift
+--- base/ios/Henge/MacRuntime.swift	1970-01-01 08:00:00.000000000 +0800
++++ work/ios/Henge/MacRuntime.swift	2026-11-26 02:49:28.434323986 +0800
+@@ -0,0 +1,100 @@
++import Foundation
++import UIKit
++
++/// 性能与节流：转译运行的 Mac 应用共用的帧率、屏幕密度、并发上限，以及过热时的自动降级。
++///
++/// 这些应用全部跑在 Henge 进程里、用 CPU 画图，所以真正决定"卡不卡、烫不烫"的是三个旋钮：
++/// 每秒泵几次事件、应用以为自己的屏幕有多大、同时开几个。默认值按"4 GB 机型能用"选，
++/// 用户可以在设置里改；过热时无论设置如何都会自动降一档，凉下来再自动恢复。
++enum MacRuntime {
++    static let fpsKey = "henge.macapps.fps"            // 60 / 30 / 20
++    static let maxAppsKey = "henge.macapps.maxApps"    // 2 / 3 / 5 / 8
++    static let thermalKey = "henge.macapps.thermal"    // 过热时自动降级
++    static let adaptiveKey = "henge.macapps.adaptive"  // 掉帧时自动降密度
++
++    /// 屏幕刷新上限，默认 30：Mac 应用的窗口是软件画出来的，60 帧会把 CPU 吃满。
++    static var fps: Int {
++        get { let v = UserDefaults.standard.integer(forKey: fpsKey); return [20, 30, 60].contains(v) ? v : 30 }
++        set { UserDefaults.standard.set(newValue, forKey: fpsKey) }
++    }
++
++    /// 同时能开几个应用。
++    static var maxApps: Int {
++        get { let v = UserDefaults.standard.integer(forKey: maxAppsKey); return [2, 3, 5, 8].contains(v) ? v : 3 }
++        set { UserDefaults.standard.set(newValue, forKey: maxAppsKey) }
++    }
++
++    /// 过热时自动降帧、降密度（默认开）。
++    static var thermalAware: Bool {
++        get { UserDefaults.standard.object(forKey: thermalKey) as? Bool ?? true }
++        set { UserDefaults.standard.set(newValue, forKey: thermalKey) }
++    }
++
++    /// 实测掉帧时自动降密度（默认开）。
++    static var adaptive: Bool {
++        get { UserDefaults.standard.object(forKey: adaptiveKey) as? Bool ?? true }
++        set { UserDefaults.standard.set(newValue, forKey: adaptiveKey) }
++    }
++
++    /// 过热降级：0 正常，1 温热（帧率减半），2 烫（帧率 20、密度 0.75），3 危险（帧率 20、密度 0.5）。
++    private(set) static var throttleLevel = 0
++
++    /// 当前真正生效的帧率。
++    static var effectiveFPS: Int {
++        switch throttleLevel {
++        case 1: return min(fps, 30)
++        case 2, 3: return 20
++        default: return fps
++        }
++    }
++
++    /// 当前真正生效的密度（在用户选择的基础上再乘一个过热系数）。
++    static var effectiveDensity: Double {
++        let base = MacScreenSize.density
++        switch throttleLevel {
++        case 2: return min(base, 0.75)
++        case 3: return min(base, 0.5)
++        default: return base
++        }
++    }
++
++    /// iOS 报告的热状态，映射成降级档。实测：`serious` 在长跑 10 分钟后出现，`critical` 很少见。
++    static func level(for state: ProcessInfo.ThermalState) -> Int {
++        switch state {
++        case .nominal: return 0
++        case .fair: return 1
++        case .serious: return 2
++        case .critical: return 3
++        @unknown default: return 1
++        }
++    }
++
++    /// 记下热状态；变了就返回 true，调用方据此重设帧率与密度。
++    @discardableResult
++    static func note(_ state: ProcessInfo.ThermalState) -> Bool {
++        let l = thermalAware ? level(for: state) : 0
++        guard l != throttleLevel else { return false }
++        throttleLevel = l
++        HengeLog.log("macapps", "thermal \(state.rawValue) → throttle \(l), fps \(effectiveFPS), density \(effectiveDensity)")
++        return true
++    }
++
++    /// 开始盯热状态（`MacDesktopScreen` 出现时调用）。
++    static func watchThermal(_ onChange: @escaping () -> Void) -> NSObjectProtocol {
++        NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification,
++                                               object: nil, queue: .main) { _ in
++            if note(ProcessInfo.processInfo.thermalState) { onChange() }
++        }
++    }
++
++    /// 一句人话，给设置页显示。
++    static var thermalSummary: String {
++        switch ProcessInfo.processInfo.thermalState {
++        case .nominal: return "正常"
++        case .fair: return "温热"
++        case .serious: return "偏烫，已降速"
++        case .critical: return "很烫，已降到最低"
++        @unknown default: return "未知"
++        }
++    }
++}
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/MacScreen.swift work/ios/Henge/MacScreen.swift
+--- base/ios/Henge/MacScreen.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/MacScreen.swift	2026-11-26 02:46:32.688041824 +0800
+@@ -7,7 +7,13 @@
+ final class MacScreenUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
+     private let stage = CALayer()
+     private var holders: [CALayer] = []
+-    var screen = CGSize(width: 1180, height: 680)
++    var screen = CGSize(width: 1180, height: 680) {
++        didSet {
++            guard screen != oldValue else { return }
++            offset = .zero
++            placeStage()
++        }
++    }
+ 
+     /// The Mac's pointer, drawn over the screen (fingers have none): in the Mac's points, origin bottom left.
+     private var cursor = CGPoint(x: 590, y: 340)
+@@ -494,7 +500,7 @@
+                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                     .background(Desk.raised, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+             }
+-            .accessibilityLabel("Hide keyboard")
++            .accessibilityLabel("收起键盘")
+         }
+         .padding(.horizontal, 6)
+         .padding(.vertical, 5)
+@@ -679,15 +685,14 @@
+     @State private var status = "Loading…"
+     @State private var started = false
+     @State private var trackpad = UserDefaults.standard.object(forKey: MacScreenUIView.trackpadKey) as? Bool ?? true
+-    private let screen = MacAppScreen.screenSize()
++    @State private var density = MacScreenSize.density
++    @State private var screen = MacAppScreen.screenSize()
+ 
+-    /// The Mac's screen in points: the device's long side by short side, made a little larger than the device so
+-    /// a desktop app has room (it is shown scaled down to fit).
+-    static func screenSize() -> CGSize {
+-        let b = UIScreen.main.bounds.size
+-        let long = max(b.width, b.height), short = min(b.width, b.height)
+-        let zoom: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 1.0 : 1.35
+-        return CGSize(width: (long * zoom).rounded(), height: (short * zoom).rounded())
++    /// The Mac's screen in points: the device's room, at the density the user picked, at 2x at most, and never more
++    /// than the device's own panel in pixels. The Mac screen is shown scaled to fit, so this is how much the app
++    /// thinks it has to draw on.
++    static func screenSize(density: Double = MacScreenSize.density) -> CGSize {
++        MacScreenSize.fit(room: UIScreen.main.bounds.size, density: density).0
+     }
+ 
+     var body: some View {
+@@ -704,6 +709,22 @@
+                         .frame(width: 38, height: 38).background(.black.opacity(0.45), in: Circle())
+                 }
+                 MacMenuButton().frame(width: 38, height: 38)
++                Menu {
++                    ForEach([("Whole screen", 1.0), ("Three quarters", 0.75), ("Half", 0.5)], id: \.0) { name, d in
++                        Button(name) {
++                            density = d
++                            MacScreenSize.density = d
++                            screen = MacAppScreen.screenSize(density: d)
++                            // The app lays out again for the new size, as a Mac does when its display is resized.
++                            henge_tl_app_set_screen(screen.width, screen.height, min(UIScreen.main.scale, 2))
++                            MacScreenHub.shared.view?.screen = screen
++                        }
++                    }
++                } label: {
++                    Image(systemName: "rectangle.compress.vertical").font(.system(size: 15, weight: .medium))
++                        .foregroundStyle(.white.opacity(0.9)).frame(width: 38, height: 38)
++                        .background(.black.opacity(0.45), in: Circle())
++                }
+                 Button { MacScreenHub.shared.view?.toggleKeyboard() } label: {
+                     Image(systemName: "keyboard").font(.system(size: 15, weight: .medium)).foregroundStyle(.white.opacity(0.9))
+                         .frame(width: 38, height: 38).background(.black.opacity(0.45), in: Circle())
+@@ -737,7 +758,7 @@
+             status = "Could not open it: \(failure)"
+             return
+         }
+-        status = "Starting…"
++        status = "正在启动…"
+         henge_tl_app_run_soon { rc in
+             HengeLog.log("macapps", "the app's main returned \(rc)")
+         }
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/MacSettingsView.swift work/ios/Henge/MacSettingsView.swift
+--- base/ios/Henge/MacSettingsView.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/MacSettingsView.swift	2026-11-26 02:44:03.988171393 +0800
+@@ -14,7 +14,7 @@
+     var body: some View {
+         ScrollView {
+             VStack(spacing: 0) {
+-                DeskHeading("Name")
++                DeskHeading("名称")
+                 TextField("Name", text: $mac.name)
+                     .font(.system(size: 16))
+                     .submitLabel(.done)
+@@ -23,7 +23,7 @@
+                     .deskCard()
+                     .onSubmit(save)
+ 
+-                DeskHeading("Memory")
++                DeskHeading("内存")
+                 VStack(alignment: .leading, spacing: 12) {
+                     HStack(alignment: .firstTextBaseline) {
+                         Text("\(mac.ramMB / 1024) GB").font(.system(size: 26, weight: .bold))
+@@ -40,10 +40,10 @@
+                 .padding(17)
+                 .deskCard()
+ 
+-                DeskHeading("Processors")
++                DeskHeading("处理器核心")
+                 Stepper(value: $cpus, in: 1...6) {
+                     HStack {
+-                        Text("CPUs").font(.system(size: 16))
++                        Text("处理器").font(.system(size: 16))
+                         Spacer()
+                         Text("\(cpus)").font(.system(size: 16, weight: .semibold))
+                     }
+@@ -52,22 +52,22 @@
+                 .padding(.vertical, 10)
+                 .deskCard()
+ 
+-                DeskHeading("About This Mac")
++                DeskHeading("关于本机")
+                 VStack(alignment: .leading, spacing: 12) {
+                     Toggle(isOn: Binding(get: { mac.reportHostIdentity ?? false }, set: {
+                         mac.reportHostIdentity = $0
+                         if !$0 { mac.reportHostModelID = false }
+                         save()
+                     })) {
+-                        Text("Report this \(Device.name)").font(.system(size: 16))
++                        Text("上报为 \(Device.name)").font(.system(size: 16))
+                     }
+-                    Text("The Mac says it is \(Device.marketingName)\(Device.chipName.map { " with the \($0) chip" } ?? ""). Changes apply the next time this Mac starts.")
++                    Text("Mac 会自称是 \(Device.marketingName)\(Device.chipName.map { " with the \($0) chip" } ?? ""). Changes apply the next time this Mac starts.")
+                         .font(.system(size: 13)).foregroundStyle(Desk.dim)
+                     if mac.reportHostIdentity == true {
+                         Toggle(isOn: Binding(get: { mac.reportHostModelID ?? false }, set: { mac.reportHostModelID = $0; save() })) {
+-                            Text("Also report a model identifier").font(.system(size: 16))
++                            Text("同时上报机型标识符").font(.system(size: 16))
+                         }
+-                        Text("Reports \(Device.snappedModelIdentifier(forOS: mac.osName)) so this Mac shows a matching icon; the name stays \(Device.marketingName). Snaps to the newest \(Device.name) this macOS recognises. Experimental: macOS keys some hardware decisions off the model.")
++                        Text("上报 \(Device.snappedModelIdentifier(forOS: mac.osName))，让这台 Mac 显示对应的图标；名称仍是 \(Device.marketingName)。会向上匹配到这个 macOS 能识别的最新 \(Device.name)。实验性：macOS 的部分硬件判断依赖机型。")
+                             .font(.system(size: 13)).foregroundStyle(Desk.dim)
+                     }
+                 }
+@@ -75,9 +75,9 @@
+                 .deskCard()
+ 
+                 if Device.fittingScreen.height != 1080 {
+-                    DeskHeading("Screen")
++                    DeskHeading("屏幕")
+                     VStack(alignment: .leading, spacing: 12) {
+-                        Picker("Screen", selection: Binding(get: {
++                        Picker("屏幕", selection: Binding(get: {
+                             if mac.isRetina { return "retina" }
+                             if mac.screen.width == Device.performanceScreen.width,
+                                mac.screen.height == Device.performanceScreen.height { return "performance" }
+@@ -94,33 +94,33 @@
+                             save()
+                         })) {
+                             if Device.isPad {
+-                                Text("Retina").tag("retina")
+-                                Text("Performance").tag("performance")
++                                Text("视网膜").tag("retina")
++                                Text("性能").tag("performance")
+                             }
+-                            Text("Fit this \(Device.name)").tag("fit")
++                            Text("适配这台 \(Device.name)").tag("fit")
+                             Text("16:9").tag("wide")
+                         }
+                         .pickerStyle(.segmented)
+-                        Text("\(mac.screen.width) × \(mac.screen.height). \(Device.isPad ? "Performance renders about 30% fewer pixels. " : "")Changes apply the next time this Mac starts.")
++                        Text("\(mac.screen.width) × \(mac.screen.height)。\(Device.isPad ? "Performance renders about 30% fewer pixels. " : "")Changes apply the next time this Mac starts.")
+                             .font(.system(size: 13)).foregroundStyle(Desk.dim)
+                     }
+                     .padding(17)
+                     .deskCard()
+                 }
+ 
+-                DeskHeading("Storage")
++                DeskHeading("存储")
+                 VStack(spacing: 11) {
+                     HStack {
+-                        Text("\(ByteText.string(UInt64(max(mac.bytesUsed, 0)))) used").font(.system(size: 16))
++                        Text("已用 \(ByteText.string(UInt64(max(mac.bytesUsed, 0))))").font(.system(size: 16))
+                         Spacer()
+-                        Text("of \(ByteText.string(UInt64(max(mac.diskBytes, 0))))").font(.system(size: 16)).foregroundStyle(Desk.dim)
++                        Text("／\(ByteText.string(UInt64(max(mac.diskBytes, 0))))").font(.system(size: 16)).foregroundStyle(Desk.dim)
+                     }
+                     DeskBar(fraction: Double(mac.bytesUsed) / Double(max(mac.diskBytes, 1)))
+                 }
+                 .padding(17)
+                 .deskCard()
+ 
+-                DeskHeading("Manage")
++                DeskHeading("管理")
+                 manage
+             }
+             .padding(.horizontal, 16)
+@@ -138,12 +138,12 @@
+             }
+         }
+         .confirmationDialog("Delete \(mac.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
+-            Button("Delete", role: .destructive) {
++            Button("删除", role: .destructive) {
+                 machines.delete(mac.id)
+                 dismiss()
+             }
+         } message: {
+-            Text("Its disk is removed from this \(Device.name).")
++            Text("它的磁盘已从这台 \(Device.name) 上移除。")
+         }
+     }
+ 
+@@ -151,7 +151,7 @@
+         VStack(spacing: 0) {
+             if let name = machines.exporting {
+                 VStack(alignment: .leading, spacing: 9) {
+-                    Text("Exporting \(name)… keep Henge open").font(.system(size: 15))
++                    Text("正在导出 \(name)…请保持 Henge 打开").font(.system(size: 15))
+                     DeskBar(fraction: machines.exported)
+                 }
+                 .padding(17)
+@@ -161,9 +161,9 @@
+             if let folder = machines.lastExport {
+                 divider
+                 VStack(alignment: .leading, spacing: 8) {
+-                    Text("Saved in Files, under Henge, Exports, \(folder.lastPathComponent). Deleting Henge deletes it too, so move it somewhere else first.")
++                    Text("已保存到「文件」的 Henge ▸ 导出 ▸ \(folder.lastPathComponent)。删除 Henge 会连它一起删掉，请先把它移到别处。")
+                         .font(.system(size: 13)).foregroundStyle(Desk.dim)
+-                    Button("Move Out of Henge…") { movingExport = true }
++                    Button("移出 Henge…") { movingExport = true }
+                         .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+                 }
+                 .padding(17)
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/MacTerminal.swift work/ios/Henge/MacTerminal.swift
+--- base/ios/Henge/MacTerminal.swift	1970-01-01 08:00:00.000000000 +0800
++++ work/ios/Henge/MacTerminal.swift	2026-11-26 02:51:36.501338398 +0800
+@@ -0,0 +1,321 @@
++import SwiftUI
++import UIKit
++
++/// 一块终端屏幕：固定大小的字符网格，喂进程序吐出的字节流，吐出能显示的文本。
++///
++/// 只实现程序真正会用到的控制序列（光标定位、清屏清行、退格、制表、颜色忽略），够跑全屏 TUI；
++/// 更复杂的（滚动区、鼠标上报、替代字符集）不处理，遇到就跳过，不会把画面搞乱。
++struct TerminalScreen {
++    let cols: Int
++    let rows: Int
++    private var cells: [[Character]]
++    private var attr: [[Bool]]          // 是否加粗/高亮（只用亮度区分，颜色全部忽略）
++    private(set) var cx = 0
++    private(set) var cy = 0
++    private var pending = ""            // 半个 UTF-8 序列或未完成的转义序列
++
++    init(cols: Int = 80, rows: Int = 24) {
++        self.cols = max(20, cols)
++        self.rows = max(6, rows)
++        cells = Array(repeating: Array(repeating: " ", count: self.cols), count: self.rows)
++        attr = Array(repeating: Array(repeating: false, count: self.cols), count: self.rows)
++    }
++
++    var cursor: (Int, Int) { (cx, cy) }
++
++    mutating func feed(_ data: [UInt8]) {
++        pending += String(decoding: data, as: UTF8.self)
++        var text = Array(pending)
++        pending = ""
++        var i = 0
++        while i < text.count {
++            let c = text[i]
++            if c == "\u{1B}" {
++                if i + 1 >= text.count { pending = String(text[i...]); return }
++                let n = text[i + 1]
++                if n == "[" {
++                    var j = i + 2
++                    while j < text.count, !(text[j].isLetter || text[j] == "@" || text[j] == "`" || text[j] == "~") { j += 1 }
++                    if j >= text.count { pending = String(text[i...]); return }
++                    let body = String(text[(i + 2)..<j])
++                    csi(body, String(text[j]))
++                    i = j + 1
++                } else if n == "]" {
++                    // OSC ... BEL 或 ST
++                    var j = i + 2
++                    while j < text.count, text[j] != "\u{07}", !(text[j] == "\u{1B}" && j + 1 < text.count && text[j + 1] == "\\") { j += 1 }
++                    if j >= text.count { pending = String(text[i...]); return }
++                    i = j + 1
++                } else {
++                    i += 2
++                }
++                continue
++            }
++            put(c)
++            i += 1
++        }
++    }
++
++    private mutating func put(_ c: Character) {
++        switch c {
++        case "\n":
++            cy += 1
++            if cy >= rows { scrollUp() ; cy = rows - 1 }
++        case "\r":
++            cx = 0
++        case "\u{08}":
++            if cx > 0 { cx -= 1 }
++        case "\t":
++            cx = min(cols - 1, (cx / 8 + 1) * 8)
++        default:
++            if cx >= cols { cx = 0; cy += 1; if cy >= rows { scrollUp(); cy = rows - 1 } }
++            cells[cy][cx] = c
++            attr[cy][cx] = false
++            cx += 1
++        }
++    }
++
++    private mutating func scrollUp() {
++        cells.removeFirst()
++        cells.append(Array(repeating: " ", count: cols))
++        attr.removeFirst()
++        attr.append(Array(repeating: false, count: cols))
++    }
++
++    private mutating func csi(_ body: String, _ final: String) {
++        // 私有模式（?25h 这类）：光标显隐、括号粘贴，忽略
++        if body.hasPrefix("?") { return }
++        let parts = body.split(separator: ";", omittingEmptySubsequences: false).map { Int($0) ?? 0 }
++        let a = parts.first ?? 0
++        switch final {
++        case "H", "f":
++            let r = max(1, parts.count > 0 ? parts[0] : 1)
++            let c = max(1, parts.count > 1 ? parts[1] : 1)
++            cy = min(rows - 1, r - 1)
++            cx = min(cols - 1, c - 1)
++        case "J":
++            switch a {
++            case 0:
++                for x in cx..<cols { cells[cy][x] = " " }
++                for y in (cy + 1)..<rows { cells[y] = Array(repeating: " ", count: cols) }
++            case 1:
++                for y in 0..<cy { cells[y] = Array(repeating: " ", count: cols) }
++                for x in 0...min(cx, cols - 1) { cells[cy][x] = " " }
++            default:
++                cells = Array(repeating: Array(repeating: " ", count: cols), count: rows)
++                cx = 0; cy = 0
++            }
++        case "K":
++            switch a {
++            case 0: for x in cx..<cols { cells[cy][x] = " " }
++            case 1: for x in 0...min(cx, cols - 1) { cells[cy][x] = " " }
++            default: cells[cy] = Array(repeating: " ", count: cols)
++            }
++        case "A": cy = max(0, cy - max(1, a))
++        case "B": cy = min(rows - 1, cy + max(1, a))
++        case "C": cx = min(cols - 1, cx + max(1, a))
++        case "D": cx = max(0, cx - max(1, a))
++        case "G": cx = min(cols - 1, max(0, max(1, a) - 1))
++        case "d": cy = min(rows - 1, max(0, max(1, a) - 1))
++        default:
++            break   // 颜色、滚区、鼠标上报：忽略
++        }
++    }
++
++    /// 整屏文本，行尾空白去掉。
++    var text: String {
++        var out = ""
++        for row in cells {
++            var line = row
++            while let last = line.last, last == " " { line.removeLast() }
++            out += String(line) + "\n"
++        }
++        return out
++    }
++}
++
++/// 终端视图：只读文本 + 键盘，特殊键单独一排。
++final class MacTerminalView: UIView, UIKeyInput {
++    private let textView = UITextView()
++    private let keys = UIStackView()
++    private var timer: Timer?
++    private var screen = TerminalScreen()
++    private var running = false
++
++    var hasText: Bool { true }
++    var autocorrectionType: UITextAutocorrectionType { .no }
++    var autocapitalizationType: UITextAutocapitalizationType { .none }
++    var keyboardType: UIKeyboardType { .asciiCapable }
++    override var canBecomeFirstResponder: Bool { true }
++
++    override init(frame: CGRect) {
++        super.init(frame: frame)
++        backgroundColor = .black
++        textView.backgroundColor = .black
++        textView.textColor = UIColor(white: 0.92, alpha: 1)
++        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
++        textView.isEditable = false
++        textView.textContainerInset = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
++        textView.translatesAutoresizingMaskIntoConstraints = false
++        addSubview(textView)
++
++        keys.axis = .horizontal
++        keys.distribution = .fillEqually
++        keys.spacing = 6
++        keys.translatesAutoresizingMaskIntoConstraints = false
++        for (title, seq) in [("esc", "\u{1B}"), ("tab", "\t"), ("⌃C", "\u{03}"), ("←", "\u{1B}[D"),
++                             ("↑", "\u{1B}[A"), ("↓", "\u{1B}[B"), ("→", "\u{1B}[C"), ("⏎", "\r")] {
++            let b = UIButton(type: .system)
++            b.setTitle(title, for: .normal)
++            b.titleLabel?.font = .systemFont(ofSize: 12, weight: .medium)
++            b.setTitleColor(.white, for: .normal)
++            b.backgroundColor = UIColor(white: 1, alpha: 0.12)
++            b.layer.cornerRadius = 6
++            b.addAction(UIAction { [weak self] _ in self?.send(seq) }, for: .touchUpInside)
++            keys.addArrangedSubview(b)
++        }
++        addSubview(keys)
++
++        NSLayoutConstraint.activate([
++            textView.topAnchor.constraint(equalTo: topAnchor),
++            textView.leadingAnchor.constraint(equalTo: leadingAnchor),
++            textView.trailingAnchor.constraint(equalTo: trailingAnchor),
++            keys.topAnchor.constraint(equalTo: textView.bottomAnchor, constant: 4),
++            keys.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
++            keys.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
++            keys.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -4),
++            keys.heightAnchor.constraint(equalToConstant: 32),
++        ])
++    }
++
++    required init?(coder: NSCoder) { fatalError("not used") }
++
++    func startTimer() {
++        timer?.invalidate()
++        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.drain() }
++    }
++
++    func stopTimer() {
++        timer?.invalidate()
++        timer = nil
++    }
++
++    private func drain() {
++        var buf = [CChar](repeating: 0, count: 8192)
++        var got = false
++        for _ in 0..<8 {
++            let n = henge_tl_tty_read(&buf, Int32(buf.count))
++            if n <= 0 { break }
++            got = true
++            let bytes = buf.prefix(Int(n)).map { UInt8(bitPattern: $0) }
++            screen.feed(bytes)
++        }
++        if got || !running { render() }
++        if running && henge_tl_tty_running() == 0 {
++            running = false
++            drain()
++            textView.text += "\n[进程已结束]"
++        }
++    }
++
++    private func render() {
++        let t = screen.text
++        if textView.text != t { textView.text = t }
++        let (x, y) = screen.cursor
++        let offset = t.split(separator: "\n", omittingEmptySubsequences: false).prefix(y).reduce(0) { $0 + $1.count + 1 }
++        let at = min(t.count, offset + min(x, screen.cols - 1))
++        textView.scrollRangeToVisible(NSRange(location: at, length: 0))
++    }
++
++    private func send(_ s: String) {
++        henge_tl_tty_write(s, Int32(s.utf8.count))
++    }
++
++    func insertText(_ text: String) { send(text) }
++    func deleteBackward() { send("\u{7F}") }
++
++    func setup(cols: Int, rows: Int) {
++        screen = TerminalScreen(cols: cols, rows: rows)
++        running = true
++        textView.text = ""
++        startTimer()
++    }
++
++    func resized(cols: Int, rows: Int) {
++        guard cols > 0, rows > 0 else { return }
++        henge_tl_tty_resize(Int32(cols), Int32(rows))
++    }
++}
++
++/// 终端外壳：选一个命令行程序，开跑。
++struct MacTerminalScreen: View {
++    let app: MacApp
++    @Environment(\.dismiss) private var dismiss
++    @State private var status = "启动中…"
++    @State private var cols = 80
++    @State private var rows = 24
++
++    var body: some View {
++        ZStack(alignment: .topLeading) {
++            MacTerminalRepresentable(cols: cols, rows: rows).ignoresSafeArea()
++            HStack(spacing: 8) {
++                Button { henge_tl_tty_stop(); dismiss() } label: {
++                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
++                        .foregroundStyle(.white.opacity(0.9)).frame(width: 32, height: 32)
++                        .background(.black.opacity(0.5), in: Circle())
++                }
++                if !status.isEmpty {
++                    Text(status).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.85))
++                        .padding(.horizontal, 9).padding(.vertical, 5)
++                        .background(.black.opacity(0.5), in: Capsule())
++                }
++                Spacer()
++                Button {
++                    UIPasteboard.general.string.map { henge_tl_tty_write($0, Int32($0.utf8.count)) }
++                } label: {
++                    Image(systemName: "doc.on.clipboard").font(.system(size: 14))
++                        .foregroundStyle(.white.opacity(0.9)).frame(width: 32, height: 32)
++                        .background(.black.opacity(0.5), in: Circle())
++                }
++            }
++            .padding(10)
++        }
++        .statusBarHidden()
++        .task { start() }
++    }
++
++    private func start() {
++        let hub = MacTerminalHub.shared
++        guard !hub.started else { return }
++        hub.started = true
++        var err = [CChar](repeating: 0, count: 512)
++        let rc = henge_tl_tty_start(app.executable, Int32(cols), Int32(rows), &err, err.count)
++        if rc != 0 {
++            status = String(cString: err)
++            HengeLog.log("terminal", "启动失败：\(status)")
++            return
++        }
++        status = ""
++        hub.view?.setup(cols: cols, rows: rows)
++        hub.view?.becomeFirstResponder()
++    }
++}
++
++struct MacTerminalRepresentable: UIViewRepresentable {
++    let cols: Int
++    let rows: Int
++    func makeUIView(context: Context) -> MacTerminalView {
++        let v = MacTerminalView()
++        MacTerminalHub.shared.view = v
++        return v
++    }
++    func updateUIView(_ v: MacTerminalView, context: Context) { v.resized(cols: cols, rows: rows) }
++    static func dismantleUIView(_ v: MacTerminalView, coordinator: ()) { v.stopTimer() }
++}
++
++@MainActor
++final class MacTerminalHub {
++    static let shared = MacTerminalHub()
++    weak var view: MacTerminalView?
++    var started = false
++}
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/Native/henge-tl-app.m work/ios/Henge/Native/henge-tl-app.m
+--- base/ios/Henge/Native/henge-tl-app.m	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/Native/henge-tl-app.m	2026-11-26 02:47:33.943903713 +0800
+@@ -5,10 +5,12 @@
+ #import <objc/message.h>
+ #include <dlfcn.h>
+ #include <stdatomic.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ #include "henge-ios-jit.h"
+ #include "henge-tl.h"
++#include "henge-tl-identity.h"
+ #include "henge-vm.h"
+ #include "../../../tl/loader/tl_loader.h"
+ #include "../../../tl/shim/appkit/HKShim.h"
+@@ -17,9 +19,20 @@
+ extern _Atomic int henge_tl_ran;
+ void henge_tl_mark_ran(void); /* henge-tl.c: one program or app per launch */
+ 
+-static TlImage *g_exe;
+-static NSString *g_app;
+-static NSArray<NSString *> *g_args;
++/* Several apps at once. Each app is a loader namespace of its own (tl_reserve_ns/tl_load_as): its own globals, its own
++   copy of every library it loads. They share this process, so they share one NSApplication, one event
++   queue and one menu bar: the front app's menus are the ones in the bar (hk_set_active_ns), and the host shows every
++   app's windows on one stage (each window says which app it is: hk_window_ns). One region holds them all, one after
++   another; the apps with windows run their main on the main thread, from run-loop timers, and none of them owns the
++   loop: hk_set_multi_app makes -[NSApplication run] lay the app out and return, and the host pumps the queue. */
++#define HENGE_TL_MAX_APPS 8
++
++static TlImage *g_exe[HENGE_TL_MAX_APPS];
++static NSString *g_app[HENGE_TL_MAX_APPS];
++static NSArray<NSString *> *g_args[HENGE_TL_MAX_APPS];
++static int g_napps;
++static TlHost g_host;          /* one region for all of them: the loader places each app after the last */
++static int g_host_ready;
+ static void (*g_changed)(void);
+ static HKPresenter g_presenter = {{1180, 680}, 3, NULL};
+ 
+@@ -30,6 +43,9 @@
+ static void *shim_lookup(const char *install_name, const char *symbol) {
+     void *s = hk_lookup(install_name, symbol);
+     if (s) return s;
++    /* What the program is told this machine is: the fields it shows, and nothing it works with (see
++       henge-tl-identity.c: the OS version, the time, the network and identifiers stay the real ones). */
++    if (symbol && !strcmp(symbol, "_sysctlbyname")) return (void *)henge_tl_sysctlbyname;
+     char buf[1024];
+     if (install_name && *install_name && !tl_ios_map_install_name(install_name, buf, sizeof buf) && strncmp(symbol, "_OBJC_", 6))
+         return dlsym(RTLD_DEFAULT, symbol + 1);
+@@ -144,13 +160,19 @@
+ void henge_tl_app_set_screen(double width, double height, double scale) {
+     g_presenter.screen_size = CGSizeMake(width, height);
+     g_presenter.scale = scale;
++    /* When apps already run, their screen changes now (a Mac lays out again when its display is resized); before
++       that, henge_tl_app_add hands this same size to the presenter. */
++    if (g_host_ready) hk_set_screen(g_presenter.screen_size, scale);
+ }
+ 
+ void henge_tl_app_on_change(void (*callback)(void)) { g_changed = callback; }
+ 
+-int henge_tl_app_load(const char *app_path, char *err, size_t errlen) {
++/* Loads one more app beside the ones already running, in a namespace of its own. Returns its namespace (0 for the
++   first app, then 1 and up), or -1 with a reason in err. */
++int henge_tl_app_add(const char *app_path, char *err, size_t errlen) {
+     @autoreleasepool {
+-        if (atomic_load(&henge_tl_ran)) return snprintf(err, errlen, "One Mac app per launch: quit Henge (swipe it away) and open it again."), -1;
++        if (henge_tl_app_count() >= HENGE_TL_MAX_APPS)
++            return snprintf(err, errlen, "At most %d apps at once.", HENGE_TL_MAX_APPS), -1;
+         int vm = henge_vm_state();
+         if (vm == 1 || vm == 3 || vm == 4) return snprintf(err, errlen, "Stop the Mac first: a Mac app and a Mac cannot run at once."), -1;
+         HengeDualMapping *jit = henge_ios_jit_get_mapping();
+@@ -162,47 +184,115 @@
+             return snprintf(err, errlen, "Google Chrome needs the largest code cache (Settings > Performance > Code cache: 1.5 GB). Chromium runs in less."), -1;
+         HengeTlInfo info;
+         if (henge_tl_info(app_path, &info, err, errlen)) return -1;
+-        static TlHost host;
+-        memset(&host, 0, sizeof host);
+-        size_t keep = (size_t)16 << 20; /* the region's start stays QEMU's way of finding it; the rest is the app's */
+-        tl_host_init_region(&host, jit->rx_addr + keep, jit->rw_addr + keep, jit->size - keep);
+-        host.map_install_name = map_name;
+-        host.shim_lookup = shim_lookup;
+-        host.log = log_line;
+-        host.soft_missing = 1;
+-        host.no_processes = 1; /* iOS starts no processes: the app's own programs run inside Henge (below) */
+-        host.processes_as_threads = 1;
+-        host.process_started = process_started;
+-        host.image_linked = image_linked;
+-        host.high_rooms = henge_ios_take_high_room(host.high_room, host.high_room_bytes); /* Chromium's large reservations */
+-        g_presenter.window_changed = window_changed;
+-        hk_set_presenter(&g_presenter);
++        if (!g_host_ready) {
++            /* One region for every app this launch: the loader places each one after the last (its `used`). */
++            memset(&g_host, 0, sizeof g_host);
++            size_t keep = (size_t)16 << 20; /* the region's start stays QEMU's way of finding it; the rest is the apps' */
++            tl_host_init_region(&g_host, jit->rx_addr + keep, jit->rw_addr + keep, jit->size - keep);
++            g_host.map_install_name = map_name;
++            g_host.shim_lookup = shim_lookup;
++            g_host.log = log_line;
++            g_host.soft_missing = 1;
++            g_host.no_processes = 1; /* iOS starts no processes: the app's own programs run inside Henge (below) */
++            g_host.processes_as_threads = 1;
++            g_host.process_started = process_started;
++            g_host.image_linked = image_linked;
++            g_host.high_rooms = henge_ios_take_high_room(g_host.high_room, g_host.high_room_bytes); /* Chromium's large reservations */
++            g_presenter.window_changed = window_changed;
++            hk_set_presenter(&g_presenter);
++            /* Display identity for the apps (About This Mac). HENGE_TL_IDENTITY=model|chip|MB|cpus overrides it. */
++            {
++                const char *env = getenv("HENGE_TL_IDENTITY");
++                char model[64] = "iPhone OS", chip[64] = "Apple A12Z";
++                unsigned long long mb = 4096;
++                int ncpu = 8;
++                if (env && *env) {
++                    char buf[256];
++                    snprintf(buf, sizeof buf, "%s", env);
++                    char *bar = strchr(buf, '|');
++                    if (bar) {
++                        *bar = 0;
++                        snprintf(model, sizeof model, "%s", buf);
++                        char *rest = bar + 1;
++                        char *b2 = strchr(rest, '|');
++                        if (b2) *b2 = 0;
++                        snprintf(chip, sizeof chip, "%s", rest);
++                        if (b2) {
++                            char *rest2 = b2 + 1;
++                            char *b3 = strchr(rest2, '|');
++                            if (b3) *b3 = 0;
++                            long v = strtol(rest2, NULL, 10);
++                            if (v > 0) mb = (unsigned long long)v;
++                            if (b3) { int c = atoi(b3 + 1); if (c > 0) ncpu = c; }
++                        }
++                    }
++                }
++                henge_tl_identity_set(model, chip, mb << 20, ncpu);
++                fprintf(stderr, "henge: tl: apps see %s / %s / %llu MB / %d cpus\n", model, chip, mb, ncpu);
++            }
+ #if !TARGET_OS_OSX
+-        /* AppKit's font methods onto UIKit's font class (only those it lacks), now that a Mac app runs. Not on a Mac:
+-           there CoreText fonts are plain CF objects, and macOS's UIFoundation would take them for AppKit's. */
+-        hk_font_adopt(nil);
+-        hk_surfaces_as_images(); /* a compositor's IOSurface frames, shown */
+-        hk_layer_autoresizing(); /* and layers sized by their autoresizing masks, as on a Mac */
++            /* AppKit's font methods onto UIKit's font class (only those it lacks), now that a Mac app runs. Not on a Mac:
++               there CoreText fonts are plain CF objects, and macOS's UIFoundation would take them for AppKit's. */
++            hk_font_adopt(nil);
++            hk_surfaces_as_images(); /* a compositor's IOSurface frames, shown */
++            hk_layer_autoresizing(); /* and layers sized by their autoresizing masks, as on a Mac */
+ #else
+-        if (getenv("HK_SURFACE_COPY")) hk_surfaces_as_images(); /* the Mac test of the iOS way */
++            if (getenv("HK_SURFACE_COPY")) hk_surfaces_as_images(); /* the Mac test of the iOS way */
+ #endif
++            /* Whether -[NSApplication run] blocks is the host's call (henge_tl_app_set_multi), not this one's: one app
++               owns the main thread, several are served by the host's loop. */
++            g_host_ready = 1;
++        }
++        /* The first app is the loader's own program (namespace 0: dyld's image 0, the main bundle's owner); the ones
++           after it get a namespace each. */
++        int ns = 0;
++        if (g_napps > 0) {
++            ns = tl_reserve_ns();
++            if (!ns) return snprintf(err, errlen, "No room for another app's namespace."), -1;
++        }
+         atomic_store(&henge_tl_ran, 1);
+         henge_tl_mark_ran();
+-        fprintf(stderr, "henge: tl: loading the app %s\n", info.executable);
+-        g_exe = tl_load(&host, info.executable, err, errlen);
+-        if (!g_exe) return -1;
+-        g_app = @(app_path);
++        /* Windows and menus the app builds while initializing belong to it. */
++        hk_ns_enter(ns);
+ #if TARGET_OS_OSX
+         tl_main_bundle_for_everyone(); /* the Mac test only: see tl_loader.h */
+ #endif
++        fprintf(stderr, "henge: tl: loading the app %s (app %d)\n", info.executable, ns);
++        TlImage *exe = ns ? tl_load_as(&g_host, info.executable, ns, err, errlen)
++                          : tl_load(&g_host, info.executable, err, errlen);
++        if (!exe) { hk_ns_enter(0); return -1; }
++        g_exe[ns] = exe;
++        g_app[ns] = @(app_path);
+         /* The app's code sees its bundle as the main bundle; Henge keeps its own (tl_bundle.m). */
+         if (tl_adopt_main_bundle(app_path)) fprintf(stderr, "henge: tl: %s has no bundle identifier\n", app_path);
+-        g_args = arguments_for(g_app, @(info.executable));
+-        fprintf(stderr, "henge: tl: loaded %zu MB at %p\n", tl_image_size(g_exe) >> 20, tl_image_base(g_exe));
+-        return 0;
++        g_args[ns] = arguments_for(g_app[ns], @(info.executable));
++        if (ns >= g_napps) g_napps = ns + 1;
++        hk_ns_enter(0);
++        fprintf(stderr, "henge: tl: loaded %zu MB at %p, %d symbols missing so far\n", tl_image_size(exe) >> 20,
++                tl_image_base(exe), tl_missing_count());
++        return ns;
+     }
+ }
+ 
++int henge_tl_app_count(void) { return g_napps; }
++int henge_tl_app_ns_at(int index) { return index >= 0 && index < g_napps && g_exe[index] ? index : -1; }
++const char *henge_tl_app_path(int ns) { return ns >= 0 && ns < g_napps && g_app[ns] ? g_app[ns].UTF8String : NULL; }
++
++/* Which app is in front: its menu bar in the bar, its windows first for the keyboard. */
++void henge_tl_app_set_active(int ns) { if (ns >= 0 && ns < g_napps) hk_set_active_ns(ns); }
++
++/* One event from the queue, sent as -[NSApplication run] would. The host's display link calls this. */
++int henge_tl_app_pump(double seconds_to_wait) { return hk_pump(seconds_to_wait); }
++
++/* Apps side by side: -[NSApplication run] lays each app out and returns, and the host pumps the one queue with
++   henge_tl_app_pump. Off (the default), one app's -run owns the main thread as AppKit's does. Call it before the
++   apps are added. */
++void henge_tl_app_set_multi(int on) { hk_set_multi_app(on); }
++
++int henge_tl_app_load(const char *app_path, char *err, size_t errlen) {
++    return henge_tl_app_add(app_path, err, errlen) < 0 ? -1 : 0;
++}
++
+ /* HENGE_TL_DUMP=1 (henge-env.txt on the phone): each shown window's layer tree, logged 15 and 40 s after the app starts,
+    with where it hangs in Henge's screen: for seeing why something the app draws does not show. */
+ static const char *bg_text(CGColorRef c) {
+@@ -250,11 +340,11 @@
+     }
+ }
+ 
+-int henge_tl_app_run(void) {
+-    if (!g_exe) return -1;
+-    int argc = (int)g_args.count;
++int henge_tl_app_run_ns(int ns) {
++    if (ns < 0 || ns >= g_napps || !g_exe[ns]) return -1;
++    int argc = (int)g_args[ns].count;
+     const char **argv = calloc((size_t)argc + 1, sizeof *argv);
+-    for (int i = 0; i < argc; i++) argv[i] = strdup(g_args[i].UTF8String);
++    for (int i = 0; i < argc; i++) argv[i] = strdup(g_args[ns][i].UTF8String);
+     const char *envp[] = {NULL};
+     if (getenv("HENGE_TL_DUMP"))
+         for (int i = 0; i < 2; i++) {
+@@ -263,36 +353,67 @@
+             CFRunLoopAddTimer(CFRunLoopGetMain(), d, kCFRunLoopCommonModes);
+             CFRelease(d);
+         }
+-    fprintf(stderr, "henge: tl: running the app's main on the main thread\n");
+-    int rc = tl_run_main(g_exe, argc, argv, envp);
+-    fprintf(stderr, "henge: tl: the app's main returned %d\n", rc);
++    fprintf(stderr, "henge: tl: running app %d's main on the main thread\n", ns);
++    hk_ns_enter(ns); /* what it builds is its own */
++    int rc = tl_run_main(g_exe[ns], argc, argv, envp);
++    hk_ns_enter(0);
++    fprintf(stderr, "henge: tl: app %d's main returned %d\n", ns, rc);
+     return rc;
+ }
+ 
++int henge_tl_app_run(void) { return henge_tl_app_run_ns(hk_active_ns()); }
++
+ /* Enters the app's main from a run-loop timer on the main thread, not from a main-queue block: the app's run loop
+    then owns the main thread, and a block would keep every later main-queue block (SwiftUI's, Swift concurrency's
+-   main actor) waiting until the app quits. */
+-void henge_tl_app_run_soon(void (*finished)(int)) {
++   main actor) waiting until the app quits. With apps side by side the app's main lays it out and returns (hk_set_multi_app),
++   so the timer only starts it: every app gets one. */
++void henge_tl_app_run_soon_ns(int ns, void (*finished)(int)) {
++    if (ns < 0 || ns >= g_napps) { if (finished) finished(-1); return; }
++    __block int once = 0;
+     CFRunLoopTimerRef t = CFRunLoopTimerCreateWithHandler(NULL, CFAbsoluteTimeGetCurrent() + 0.05, 0, 0, 0, ^(CFRunLoopTimerRef timer) {
+         (void)timer;
+-        int rc = henge_tl_app_run();
++        if (once++) return;
++        int rc = henge_tl_app_run_ns(ns);
+         if (finished) finished(rc);
+     });
+     CFRunLoopAddTimer(CFRunLoopGetMain(), t, kCFRunLoopCommonModes);
+     CFRelease(t);
+ }
+ 
++void henge_tl_app_run_soon(void (*finished)(int)) { henge_tl_app_run_soon_ns(hk_active_ns(), finished); }
++
+ /* ---- windows, for MacScreenView ---- */
+ 
+ static NSArray<NSWindow *> *shown(void) { return hk_visible_windows(); }
++static NSArray<NSWindow *> *shown_ns(int ns) { return hk_visible_windows_of_ns(ns); }
+ 
+ int henge_tl_app_window_count(void) { return (int)shown().count; }
++int henge_tl_app_window_count_of(int ns) { return (int)shown_ns(ns).count; }
+ 
+ void *henge_tl_app_window_layer(int index) {
+     NSArray *ws = shown();
+     return index >= 0 && index < (int)ws.count ? (__bridge void *)[ws[index] hk_rootLayer] : NULL;
+ }
+ 
++/* The window's app, and its order among that app's windows: for a host that shows each app in its own area. */
++int henge_tl_app_window_ns(int index) {
++    NSArray *ws = shown();
++    return index >= 0 && index < (int)ws.count ? hk_window_ns(ws[index]) : -1;
++}
++
++void *henge_tl_app_window_layer_of(int ns, int index) {
++    NSArray *ws = shown_ns(ns);
++    return index >= 0 && index < (int)ws.count ? (__bridge void *)[ws[index] hk_rootLayer] : NULL;
++}
++
++int henge_tl_app_window_frame_of(int ns, int index, double *x, double *y, double *w, double *h) {
++    NSArray<NSWindow *> *ws = shown_ns(ns);
++    if (index < 0 || index >= (int)ws.count) return -1;
++    NSRect f = ws[index].frame;
++    *x = f.origin.x, *y = f.origin.y, *w = f.size.width, *h = f.size.height;
++    return 0;
++}
++
+ int henge_tl_app_window_frame(int index, double *x, double *y, double *w, double *h) {
+     NSArray<NSWindow *> *ws = shown();
+     if (index < 0 || index >= (int)ws.count) return -1;
+@@ -301,7 +422,7 @@
+     return 0;
+ }
+ 
+-double henge_tl_app_screen_height(void) { return g_presenter.screen_size.height; }
++double henge_tl_app_screen_height(void) { return hk_screen_size().height; }
+ 
+ /* A point on the screen (points, origin bottom left) to the frontmost window under it and a point in it. */
+ static NSWindow *window_at(double sx, double sy, CGPoint *local) {
+@@ -362,8 +483,11 @@
+             continue;
+         }
+         NSString *title = it.title ?: @"";
+-        if (!depth && i == 0 && it.submenu) /* the application menu: titled with the app's name */
+-            title = [[g_app lastPathComponent] stringByDeletingPathExtension] ?: title;
++        if (!depth && i == 0 && it.submenu) { /* the application menu: titled with the app's name */
++            /* The front app's name: each app in this process has its own, and the bar shows the front one's menus. */
++            NSString *name = g_app[hk_active_ns()] ?: g_app[0];
++            title = [name.lastPathComponent stringByDeletingPathExtension] ?: title;
++        }
+         if (!title.length) continue;
+         NSMutableDictionary *d = [@{@"title" : title, @"enabled" : @(it.isEnabled || (!depth && it.submenu)), @"state" : @(it.state),
+                                     @"path" : here} mutableCopy];
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/Native/henge-tl-identity.c work/ios/Henge/Native/henge-tl-identity.c
+--- base/ios/Henge/Native/henge-tl-identity.c	1970-01-01 08:00:00.000000000 +0800
++++ work/ios/Henge/Native/henge-tl-identity.c	2026-11-26 02:54:48.535619043 +0800
+@@ -0,0 +1,111 @@
++/* What a Mac program running through the translation layer is told this machine is.
++ *
++ * Only the fields an app shows in "About This Mac" are answered here; everything an app *works* with (the OS
++ * version, the CPU count, the time, the network, identifiers, the file system) is the real one, from iOS. Faking
++ * those breaks apps: version checks refuse to start, certificate and nonce code fails, and a machine whose clock or
++ * memory size lies is a machine apps crash on. So this is display only.
++ *
++ * The values are the ones Henge reports for its Macs (an Apple silicon Mac the app's macOS recognises), except that
++ * the model reads "iPhone OS", the chip "Apple A12Z" and the memory 4 GB, as configured here.
++ *
++ * Region is NOT faked: NSLocale answers the device's real region, so an app that asks where the machine is gets the
++ * truth (China → 国行, United States → 美版, and so on). */
++#include <sys/sysctl.h>
++#include <string.h>
++#include <stdio.h>
++
++#include "henge-tl-identity.h"
++
++/* Set by henge_tl_identity_set(); NULL/0 means "answer nothing, let iOS answer". */
++static char g_model[64];
++static char g_chip[64];
++static unsigned long long g_memsize;
++static int g_ncpu;
++
++void henge_tl_identity_set(const char *model, const char *chip, unsigned long long memsize, int ncpu) {
++    snprintf(g_model, sizeof g_model, "%s", model ? model : "");
++    snprintf(g_chip, sizeof g_chip, "%s", chip ? chip : "");
++    g_memsize = memsize;
++    g_ncpu = ncpu;
++}
++
++/* A string-valued sysctl answered here: 1 if it was one of ours. */
++static int answer_string(const char *name, void *oldp, size_t *oldlenp) {
++    const char *v = NULL;
++    if (*g_model && (!strcmp(name, "hw.model") || !strcmp(name, "hw.targettype"))) v = g_model;
++    else if (*g_chip && (!strcmp(name, "machdep.cpu.brand_string") || !strcmp(name, "hw.chip"))) v = g_chip;
++    if (!v) return 0;
++    size_t n = strlen(v) + 1;
++    if (oldp && oldlenp) {
++        if (*oldlenp < n) { *oldlenp = n; return 1; }
++        memcpy(oldp, v, n);
++        *oldlenp = n;
++    }
++    return 1;
++}
++
++/* 验机与硬件检测类软件会读的一整组固定值：芯片、频率、缓存、页大小。
++   A12Z 的实际规格（8 核、2.5 GHz、128 字节 cache line、16 KB 页）。这些是"这台机器是什么"的一部分，
++   和 hw.model 属于同一类展示信息；改它们不会影响程序怎么跑，只影响报告出来的规格。 */
++static const struct { const char *name; unsigned long long value; int width; } kFacts[] = {
++    {"machdep.cpu.core_count", 8, 4},
++    {"machdep.cpu.thread_count", 8, 4},
++    {"machdep.cpu.logical_cpu_max", 8, 4},
++    {"hw.physicalcpu", 8, 4},
++    {"hw.physicalcpu_max", 8, 4},
++    {"hw.cpufrequency", 2500000000ULL, 8},
++    {"hw.cpufrequency_max", 2500000000ULL, 8},
++    {"hw.cachelinesize", 128, 4},
++    {"hw.l1icachesize", 131072, 8},
++    {"hw.l1dcachesize", 65536, 8},
++    {"hw.l2cachesize", 8388608, 8},
++    {"hw.pagesize", 16384, 4},
++    {"hw.memsize", 0, 8},        /* filled from g_memsize */
++    {"hw.memsize_usable", 0, 8},
++    {"hw.ncpu", 0, 4},           /* filled from g_ncpu */
++    {"hw.activecpu", 0, 4},
++    {"hw.logicalcpu", 0, 4},
++    {"hw.logicalcpu_max", 0, 4},
++    {"hw.availablecpu", 0, 4},
++};
++
++static int answer_int(const char *name, void *oldp, size_t *oldlenp) {
++    unsigned long long v = 0;
++    int width = 0;
++    for (size_t i = 0; i < sizeof kFacts / sizeof *kFacts; i++) {
++        if (strcmp(name, kFacts[i].name)) continue;
++        v = kFacts[i].value;
++        width = kFacts[i].width;
++        /* 计数字段跟配置走，频率与缓存保持表里的固定值：hw.cpufrequency 里也有 "cpu"，不能按子串判断。 */
++        if (!strcmp(name, "hw.memsize") || !strcmp(name, "hw.memsize_usable")) {
++            v = g_memsize;
++        } else if (!strcmp(name, "hw.ncpu") || !strcmp(name, "hw.activecpu") || !strcmp(name, "hw.logicalcpu") ||
++                   !strcmp(name, "hw.logicalcpu_max") || !strcmp(name, "hw.availablecpu") ||
++                   !strcmp(name, "hw.physicalcpu") || !strcmp(name, "hw.physicalcpu_max") ||
++                   !strcmp(name, "machdep.cpu.core_count") || !strcmp(name, "machdep.cpu.thread_count") ||
++                   !strcmp(name, "machdep.cpu.logical_cpu_max")) {
++            v = (unsigned long long)g_ncpu;
++        }
++        break;
++    }
++    if (!width) return 0;
++    if (oldp && oldlenp) {
++        if (*oldlenp < (size_t)width) { *oldlenp = (size_t)width; return 1; }
++        if (width == 8) memcpy(oldp, &v, 8);
++        else { int w = (int)v; memcpy(oldp, &w, 4); }
++        *oldlenp = (size_t)width;
++    }
++    return 1;
++}
++
++/* A program's sysctlbyname, through the loader's shim: ours for the display fields, the real one for everything
++ * else (including every kern.*, so version checks keep working). */
++int henge_tl_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
++    if (name && !newp) {
++        if (answer_string(name, oldp, oldlenp)) return 0;
++        if (answer_int(name, oldp, oldlenp)) return 0;
++    }
++    /* The real one: this file is not what libSystem exports here, so the call reaches iOS's own implementation.
++       (Only the guest's imports are pointed at this function.) */
++    return sysctlbyname(name, oldp, oldlenp, newp, newlen);
++}
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/Native/henge-tl-identity.h work/ios/Henge/Native/henge-tl-identity.h
+--- base/ios/Henge/Native/henge-tl-identity.h	1970-01-01 08:00:00.000000000 +0800
++++ work/ios/Henge/Native/henge-tl-identity.h	2026-11-26 02:47:04.486343926 +0800
+@@ -0,0 +1,14 @@
++/* What a Mac program is told this machine is (display fields only). See henge-tl-identity.c. */
++#ifndef HENGE_TL_IDENTITY_H
++#define HENGE_TL_IDENTITY_H
++
++#include <stddef.h>
++
++/* The values a program sees for the fields it shows: hw.model, machdep.cpu.brand_string, hw.memsize, hw.ncpu.
++   Empty model/chip and 0 sizes leave that field to iOS's real answer. */
++void henge_tl_identity_set(const char *model, const char *chip, unsigned long long memsize, int ncpu);
++
++/* A program's sysctlbyname, to bind instead of the real one. */
++int henge_tl_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
++
++#endif
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/Native/henge-tl.c work/ios/Henge/Native/henge-tl.c
+--- base/ios/Henge/Native/henge-tl.c	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/Native/henge-tl.c	2026-11-26 02:52:37.001231093 +0800
+@@ -19,6 +19,9 @@
+ #include "henge-vm.h"
+ #include "../../../tl/dmg/tl_dmg.h"
+ #include "../../../tl/loader/tl_loader.h"
++#include <stdarg.h>
++#include <sys/ioctl.h>
++#include <termios.h>
+ 
+ HengeDualMapping *henge_ios_jit_get_mapping(void);
+ extern _Atomic int henge_tl_ran; /* henge-vm.c: no Mac starts once this is set */
+@@ -209,9 +212,35 @@
+     pthread_exit(NULL);
+ }
+ 
++extern _Atomic int g_tty_active;
++static int g_tty_cols, g_tty_rows;
++
++/* 终端会话里，程序的 stdin/stdout 是管道；但对它来说那是一条终端（isatty 是真、窗口大小真），
++   否则 Codex 这类 TUI 会当成被重定向而只输出纯文本。管道上的 ioctl 一律失败，所以这两条由这里代答。 */
++static int guest_isatty(int fd) { return fd >= 0 && fd <= 2 ? 1 : 0; }
++
++static int guest_ioctl(int fd, unsigned long req, ...) {
++    va_list ap;
++    va_start(ap, req);
++    void *arg = va_arg(ap, void *);
++    va_end(ap);
++    if (req == TIOCGWINSZ && arg) {
++        struct winsize *ws = (struct winsize *)arg;
++        ws->ws_col = (unsigned short)g_tty_cols;
++        ws->ws_row = (unsigned short)g_tty_rows;
++        ws->ws_xpixel = ws->ws_ypixel = 0;
++        return 0;
++    }
++    return ioctl(fd, req, arg);
++}
++
+ static void *shim_lookup(const char *install_name, const char *symbol) {
+     if (!strstr(install_name, "libSystem")) return NULL;
+     if (!strcmp(symbol, "_exit") || !strcmp(symbol, "__exit") || !strcmp(symbol, "__Exit")) return (void *)guest_exit;
++    if (atomic_load(&g_tty_active)) {
++        if (!strcmp(symbol, "_isatty")) return (void *)guest_isatty;
++        if (!strcmp(symbol, "_ioctl")) return (void *)guest_ioctl;
++    }
+     return NULL;
+ }
+ 
+@@ -289,3 +318,118 @@
+     fprintf(stderr, "henge: tl: %s returned %d\n", path, code);
+     return code;
+ }
++
++/* ---- 交互终端：命令行程序跑在管道上，宿主喂输入、收输出 ---- */
++
++_Atomic int g_tty_active;
++static int g_tty_tx[2] = {-1, -1};  /* 宿主写 → 程序读（fd 0） */
++static int g_tty_rx[2] = {-1, -1};  /* 程序写 → 宿主读（fd 1/2） */
++static _Atomic int g_tty_running;
++static pthread_t g_tty_thread;
++static char g_tty_path[1024];
++
++static void *tty_thread(void *opaque) {
++    TlImage *exe = opaque;
++    int s0 = dup(0), s1 = dup(1), s2 = dup(2);
++    dup2(g_tty_tx[0], 0);
++    dup2(g_tty_rx[1], 1);
++    dup2(g_tty_rx[1], 2);
++    const char *argv[] = {g_tty_path, NULL};
++    char home[1100], cols[32], rows[32], term[64];
++    const char *tmp = getenv("TMPDIR");
++    snprintf(home, sizeof home, "HOME=%s", tmp && *tmp ? tmp : "/tmp");
++    snprintf(cols, sizeof cols, "COLUMNS=%d", g_tty_cols);
++    snprintf(rows, sizeof rows, "LINES=%d", g_tty_rows);
++    snprintf(term, sizeof term, "TERM=xterm-256color");
++    const char *envp[] = {home, cols, rows, term, "LANG=zh_CN.UTF-8", NULL};
++    atomic_store(&exit_code, tl_run_main(exe, 1, argv, envp));
++    fflush(NULL);
++    if (s0 >= 0) dup2(s0, 0), close(s0);
++    if (s1 >= 0) dup2(s1, 1), close(s1);
++    if (s2 >= 0) dup2(s2, 2), close(s2);
++    /* 关掉写端：宿主那边的 read 才会读到 EOF，而不是一直等到超时。 */
++    if (g_tty_rx[1] >= 0) close(g_tty_rx[1]), g_tty_rx[1] = -1;
++    atomic_store(&g_tty_running, 0);
++    return NULL;
++}
++
++/* 启动一个带终端的命令行程序。cols/rows 是它以为的窗口大小；返回 0，或 -1 并在 err 里说明。 */
++int henge_tl_tty_start(const char *path, int cols, int rows, char *err, size_t errlen) {
++    if (atomic_load(&runs)) return snprintf(err, errlen, "这次启动已经跑过一个程序了：退出 Henge 再打开。"), -1;
++    if (atomic_load(&g_tty_running)) return snprintf(err, errlen, "终端已经有一个程序在跑。"), -1;
++    int vm = henge_vm_state();
++    if (vm == 1 || vm == 3 || vm == 4) return snprintf(err, errlen, "先把 Mac 停掉。"), -1;
++    HengeDualMapping *jit = henge_ios_jit_get_mapping();
++    if (!jit || !jit->rw_addr || !jit->rx_addr) return snprintf(err, errlen, "请先开启 JIT。"), -1;
++    if (jit->size < 4 * (size_t)TL_REGION) return snprintf(err, errlen, "JIT 区域太小。"), -1;
++    g_tty_cols = cols > 0 ? cols : 80;
++    g_tty_rows = rows > 0 ? rows : 24;
++    if (pipe(g_tty_tx) || pipe(g_tty_rx)) {
++        snprintf(err, errlen, "建不出管道。");
++        return -1;
++    }
++    fcntl(g_tty_rx[0], F_SETFL, fcntl(g_tty_rx[0], F_GETFL) | O_NONBLOCK);
++    static TlHost host;
++    memset(&host, 0, sizeof host);
++    size_t at = jit->size - TL_REGION;
++    tl_host_init_region(&host, jit->rx_addr + at, jit->rw_addr + at, TL_REGION);
++    host.map_install_name = tl_ios_map_install_name;
++    host.shim_lookup = shim_lookup;
++    host.log = log_line;
++    host.soft_missing = 1;
++    atomic_store(&henge_tl_ran, 1);
++    atomic_store(&runs, 1);
++    atomic_store(&g_tty_active, 1);
++    snprintf(g_tty_path, sizeof g_tty_path, "%s", path);
++    TlImage *exe = tl_load(&host, path, err, errlen);
++    if (!exe) {
++        atomic_store(&g_tty_active, 0);
++        close(g_tty_tx[0]), close(g_tty_tx[1]), close(g_tty_rx[0]), close(g_tty_rx[1]);
++        return -1;
++    }
++    atomic_store(&g_tty_running, 1);
++    pthread_attr_t attr;
++    pthread_attr_init(&attr);
++    pthread_attr_setstacksize(&attr, 8u << 20);
++    int rc = pthread_create(&g_tty_thread, &attr, tty_thread, exe);
++    pthread_attr_destroy(&attr);
++    if (rc) {
++        snprintf(err, errlen, "起不了线程。");
++        atomic_store(&g_tty_running, 0);
++        return -1;
++    }
++    return 0;
++}
++
++/* 读程序写到终端的东西。返回字节数；0 表示暂时没有；-1 表示结束了。 */
++int henge_tl_tty_read(char *buf, int cap) {
++    if (g_tty_rx[0] < 0) return -1;
++    ssize_t n = read(g_tty_rx[0], buf, (size_t)cap);
++    if (n > 0) return (int)n;
++    if (n == 0) return -1;
++    return errno == EAGAIN || errno == EWOULDBLOCK ? 0 : -1;
++}
++
++/* 把输入送给程序（按键、粘贴都算）。返回写入字节数。 */
++int henge_tl_tty_write(const char *buf, int len) {
++    if (g_tty_tx[1] < 0) return -1;
++    return (int)write(g_tty_tx[1], buf, (size_t)len);
++}
++
++void henge_tl_tty_resize(int cols, int rows) {
++    g_tty_cols = cols > 0 ? cols : 80;
++    g_tty_rows = rows > 0 ? rows : 24;
++}
++
++int henge_tl_tty_running(void) { return atomic_load(&g_tty_running); }
++
++const char *henge_tl_tty_path(void) { return g_tty_path; }
++
++/* 结束一个终端会话（程序退出后调用，释放管道）。 */
++void henge_tl_tty_stop(void) {
++    atomic_store(&g_tty_active, 0);
++    if (g_tty_tx[0] >= 0) close(g_tty_tx[0]), g_tty_tx[0] = -1;
++    if (g_tty_tx[1] >= 0) close(g_tty_tx[1]), g_tty_tx[1] = -1;
++    if (g_tty_rx[0] >= 0) close(g_tty_rx[0]), g_tty_rx[0] = -1;
++    if (g_tty_rx[1] >= 0) close(g_tty_rx[1]), g_tty_rx[1] = -1;
++}
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/Native/henge-tl.h work/ios/Henge/Native/henge-tl.h
+--- base/ios/Henge/Native/henge-tl.h	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/Native/henge-tl.h	2026-11-26 02:51:05.448239887 +0800
+@@ -39,19 +39,46 @@
+    AppKit, one per launch, and no Mac can start after it. ---- */
+ /* The screen the app sees, in points, and its scale. Before henge_tl_app_load. */
+ void henge_tl_app_set_screen(double width, double height, double scale);
++/* Several apps at once: each is a namespace of its own, loaded after the last in the same region. */
++#define HENGE_TL_MAX_APPS 8
++/* Loads one more app beside those already running. Returns its namespace (0 for the first), or -1 with a reason in
++   err. The apps share one NSApplication and one menu bar: the front app's menus are shown. */
++int henge_tl_app_add(const char *app_path, char *err, size_t errlen);
++int henge_tl_app_count(void);
++int henge_tl_app_ns_at(int index);
++const char *henge_tl_app_path(int ns);
++/* The apps share one screen (they are windows of one process, shown together): henge_tl_app_set_screen above is it,
++   and changing it while they run makes them lay out again for the new size, as a Mac does when its display is
++   resized. The host keeps it within the device's own panel. */
++/* Which app is in front: its menu bar in the bar, its windows first for the keyboard. */
++void henge_tl_app_set_active(int ns);
++/* One event from the queue, sent as -[NSApplication run] would (run the thread's run loop on the way). The host's
++   display link calls this while apps are side by side. */
++int henge_tl_app_pump(double seconds_to_wait);
++/* Apps side by side: -[NSApplication run] lays each app out and returns, and the host pumps the one queue. Off (the
++   default), one app's -run owns the main thread, as AppKit's does. Before the apps are added. */
++void henge_tl_app_set_multi(int on);
+ /* Called on the main thread whenever a window appears, goes, or changes. */
+ void henge_tl_app_on_change(void (*callback)(void));
+ /* Loads the app (any thread; it takes a while for a big one). 0, or -1 with a reason in err. */
+ int henge_tl_app_load(const char *app_path, char *err, size_t errlen);
+ /* Runs the app's main on the calling thread, which must be the main thread; returns when the app quits. */
+ int henge_tl_app_run(void);
++/* One app's main. */
++int henge_tl_app_run_ns(int ns);
+ /* The same, entered from a run-loop timer on the main thread shortly (see henge-tl-app.m); finished gets main's result. */
+ void henge_tl_app_run_soon(void (*finished)(int));
++void henge_tl_app_run_soon_ns(int ns, void (*finished)(int));
+ /* The app's windows on screen, back to front: count, the layer to show (a CALayer *), and the frame in screen points
+    (origin at the bottom left, as the app sees it). */
+ int henge_tl_app_window_count(void);
++int henge_tl_app_window_count_of(int ns);
+ void *henge_tl_app_window_layer(int index);
++void *henge_tl_app_window_layer_of(int ns, int index);
+ int henge_tl_app_window_frame(int index, double *x, double *y, double *w, double *h);
++int henge_tl_app_window_frame_of(int ns, int index, double *x, double *y, double *w, double *h);
++/* Which app a window belongs to (-1 for no such window). */
++int henge_tl_app_window_ns(int index);
+ double henge_tl_app_screen_height(void);
+ /* Input in screen points, origin at the bottom left. type is AppKit's NSEventType (1 left down, 2 left up, 5 moved,
+    6 left dragged, 3/4 right down/up); phase is NSEventPhase; flags AppKit's modifier flags. */
+@@ -67,4 +94,16 @@
+ /* Chooses the item at a path from henge_tl_app_main_menu: its action is sent, as AppKit does. Main thread. */
+ void henge_tl_app_menu_choose(const int *path, int depth);
+ 
++/* ---- 交互终端（实验性）：让命令行程序（Codex CLI 之类）在 Henge 里有一条真终端 ----
++
++   程序跑在两条管道上：宿主喂按键、收屏幕输出。对它来说那是一条终端（isatty 为真、窗口大小由
++   henge_tl_tty_resize 给），所以全屏 TUI 也能起来。一次启动仍然只能跑一个程序。 */
++int henge_tl_tty_start(const char *path, int cols, int rows, char *err, size_t errlen);
++int henge_tl_tty_read(char *buf, int cap);          /* >0 字节数，0 暂时没有，-1 结束 */
++int henge_tl_tty_write(const char *buf, int len);
++void henge_tl_tty_resize(int cols, int rows);
++int henge_tl_tty_running(void);
++const char *henge_tl_tty_path(void);
++void henge_tl_tty_stop(void);
++
+ #endif
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/SessionView.swift work/ios/Henge/SessionView.swift
+--- base/ios/Henge/SessionView.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/SessionView.swift	2026-11-26 02:46:32.701623795 +0800
+@@ -66,8 +66,8 @@
+                         if display.isExternal && state != 2 {
+                             VStack(spacing: 8) {
+                                 Image(systemName: "display").font(.largeTitle)
+-                                Text("Mac on external display").font(.headline)
+-                                Text("Use the trackpad, keyboard or a connected mouse.")
++                                Text("Mac 输出到外接显示器").font(.headline)
++                                Text("使用触控板、键盘，或连上的鼠标。")
+                                     .font(.subheadline)
+                             }
+                             .foregroundStyle(.white)
+@@ -101,7 +101,7 @@
+                         floatingControls(layout)
+                     }
+                     if pointerRefused && !showRevealHint {
+-                        Label("Make Henge full screen to use the trackpad or mouse as the Mac's", systemImage: "cursorarrow.rays")
++                        Label("把 Henge 全屏，才能用触控板或鼠标当作 Mac 的", systemImage: "cursorarrow.rays")
+                             .font(.system(size: 15, weight: .medium))
+                             .foregroundStyle(.white)
+                             .padding(.horizontal, 18).padding(.vertical, 12)
+@@ -111,7 +111,7 @@
+                             .allowsHitTesting(false)
+                     }
+                     if showRevealHint {
+-                        Label("Tap with four fingers to show the controls", systemImage: "hand.tap")
++                        Label("四指点按可显示控制按钮", systemImage: "hand.tap")
+                             .font(.system(size: 15, weight: .medium))
+                             .foregroundStyle(.white)
+                             .padding(.horizontal, 18).padding(.vertical, 12)
+@@ -121,7 +121,7 @@
+                             .allowsHitTesting(false)
+                     }
+                     if showWallpaperTip && !showRevealHint && !pointerRefused {
+-                        Label("For more speed, give this Mac a still wallpaper and set its screen saver to Never in System Settings.", systemImage: "speedometer")
++                        Label("想要更快，就给这台 Mac 换成静态壁纸，并在系统设置里把屏幕保护程序设为「永不」。", systemImage: "speedometer")
+                             .font(.system(size: 15, weight: .medium))
+                             .foregroundStyle(.white)
+                             .multilineTextAlignment(.leading)
+@@ -166,9 +166,9 @@
+         .persistentSystemOverlays(.hidden)
+         .sheet(isPresented: $showDetails) { details }
+         .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
+-            Button("Shut Down", role: .destructive) { finish() }
++            Button("关机", role: .destructive) { finish() }
+         } message: {
+-            Text("This turns the Mac off at once. Anything not saved on it is lost.")
++            Text("这会立刻关闭 Mac。没有保存的内容会丢失。")
+         }
+         .onChange(of: zoomed) { on in
+             zoomFollowing?.cancel()
+@@ -288,7 +288,7 @@
+     @ViewBuilder private func uprightControls(_ layout: Layout) -> some View {
+         if !typing && !controlsHidden {
+             HStack {
+-                tool("eye.slash", "Hide controls") { hideControls() }
++                tool("eye.slash", "隐藏控制条") { hideControls() }
+                 Spacer()
+                 tool("keyboard", "Keyboard") { typing = true }
+                 Spacer()
+@@ -298,7 +298,7 @@
+                 Spacer()
+                 tool("info.circle", "Details") { showDetails = true }
+                 Spacer()
+-                tool("power", "Shut down", tint: Desk.bad) { stopTapped() }
++                tool("power", "关机", tint: Desk.bad) { stopTapped() }
+             }
+             .padding(.horizontal, 22)
+             .frame(width: layout.pad.width, height: 54)
+@@ -316,22 +316,22 @@
+             ZStack {
+                 Trackpad()
+                 if compact {
+-                    Text("Trackpad").font(.system(size: 14)).foregroundStyle(Desk.faint).allowsHitTesting(false)
++                    Text("触控板").font(.system(size: 14)).foregroundStyle(Desk.faint).allowsHitTesting(false)
+                 } else {
+                     VStack(spacing: 6) {
+                         hint("Drag", "to move")
+-                        hint("Tap", "to click")
+-                        hint("Hold, then drag", "to grab")
+-                        hint("Two fingers", "to scroll")
++                        hint("点按", "单击")
++                        hint("按住再拖", "拖拽")
++                        hint("双指", "滚动")
+                     }
+                     .allowsHitTesting(false)
+                 }
+             }
+             Rectangle().fill(Desk.hairline).frame(height: 0.5)
+             HStack(spacing: 0) {
+-                MouseButton(title: "Click", button: 0)
++                MouseButton(title: "左键", button: 0)
+                 Rectangle().fill(Desk.hairline).frame(width: 0.5)
+-                MouseButton(title: "Right-click", button: 1)
++                MouseButton(title: "右键", button: 1)
+             }
+             .frame(height: compact ? 50 : 70)
+         }
+@@ -384,13 +384,13 @@
+         let landscape = layout.touch.width > layout.touch.height
+         let top = layout.insets.top + (landscape ? 8 : 6)
+         let pill = HStack(spacing: 4) {
+-            tool("eye.slash", "Hide controls", tint: .white) { hideControls() }
++            tool("eye.slash", "隐藏控制条", tint: .white) { hideControls() }
+             tool("keyboard", "Keyboard", tint: .white) { typing.toggle() }
+             pasteTool
+-            tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "Zoom out" : "Zoom in", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
++            tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "缩小" : "Zoom in", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
+             tool("info.circle", "Details", tint: .white) { showDetails = true }
+             Rectangle().fill(Color.white.opacity(0.3)).frame(width: 1, height: 22).padding(.horizontal, 4)
+-            tool("power", "Shut down", tint: Desk.bad) { stopTapped() }
++            tool("power", "关机", tint: Desk.bad) { stopTapped() }
+         }
+         .padding(.horizontal, 8)
+         .frame(height: 50)
+@@ -460,9 +460,9 @@
+ 
+     private func errorCard(_ text: String, _ layout: Layout) -> some View {
+         VStack(alignment: .leading, spacing: 10) {
+-            Text("This Mac could not start").font(.system(size: 17, weight: .semibold))
++            Text("这台 Mac 无法启动").font(.system(size: 17, weight: .semibold))
+             Text(text).font(.system(size: 14)).foregroundStyle(Desk.dim)
+-            Button("Close") { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
++            Button("关闭") { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+         }
+         .padding(18)
+         .frame(width: min(layout.touch.width, 390) - 32, alignment: .leading)
+@@ -472,9 +472,9 @@
+ 
+     private var phase: String {
+         switch state {
+-        case 0: return error == nil ? "Starting…" : "Not started"
+-        case 1: return userCode ? "macOS is running" : "Booting"
+-        case 3: return "Finishing shutdown…"
++        case 0: return error == nil ? "正在启动…" : "未启动"
++        case 1: return userCode ? "macOS 正在运行" : "正在引导"
++        case 3: return "正在完成关机…"
+         default: return "Stopped (\(String(cString: henge_vm_exit_reason())))"
+         }
+     }
+@@ -484,35 +484,35 @@
+             List {
+                 Section(phase) {
+                     LabeledContent("CPUs on", value: "\(cpusOn) of \(cpus)")
+-                    LabeledContent("Temperature", value: Self.thermalLabel(thermalState))
+-                    LabeledContent("Translated blocks", value: String(format: "%.1f M/s", blocksPerSecond / 1e6))
+-                    LabeledContent("Network frames", value: "\(framesOut) out, \(framesIn) in")
++                    LabeledContent("温度", value: Self.thermalLabel(thermalState))
++                    LabeledContent("已转译的块", value: String(format: "%.1f M/s", blocksPerSecond / 1e6))
++                    LabeledContent("网络帧", value: "\(framesOut) out, \(framesIn) in")
+                     LabeledContent("Up", value: "\(Int(Date().timeIntervalSince(started))) s")
+                 }
+-                Section("Display") {
+-                    Toggle("Color matching", isOn: $matchScreenColors)
+-                    LabeledContent("Brightness", value: "\(Int(screenBrightness * 100))%")
++                Section("显示") {
++                    Toggle("色彩匹配", isOn: $matchScreenColors)
++                    LabeledContent("亮度", value: "\(Int(screenBrightness * 100))%")
+                     Slider(value: $screenBrightness, in: 0.4...1)
+-                    Text("Brightness dims only the Mac's screen.")
++                    Text("亮度只调暗 Mac 的画面。")
+                         .font(.footnote).foregroundStyle(.secondary)
+                 }
+-                Section("Pointer") {
+-                    Picker("Size", selection: $cursorScale) {
++                Section("指针") {
++                    Picker("大小", selection: $cursorScale) {
+                         Text("1×").tag(1)
+                         Text("2×").tag(2)
+                         Text("3×").tag(3)
+                     }
+                     .pickerStyle(.segmented)
+-                    Toggle("Sharp edges", isOn: $sharpCursor)
+-                    LabeledContent("Scroll speed", value: String(format: "%.1f×", scrollSpeed))
++                    Toggle("锐利边缘", isOn: $sharpCursor)
++                    LabeledContent("滚轮速度", value: String(format: "%.1f×", scrollSpeed))
+                     Slider(value: $scrollSpeed, in: 0.1...1.5)
+-                    Text("The Mac supplies a small pointer image. Enlarging it can look blurry; 1× is the sharpest on an iPad. Scroll speed changes apply immediately.")
++                    Text("指针图像由 Mac 提供，放大会发虚；在 iPad 上 1× 最清晰。滚轮速度的改动立即生效。")
+                         .font(.footnote).foregroundStyle(.secondary)
+                 }
+-                Section("Sharing") {
+-                    LabeledContent("Clipboard and folder", value: helperRunning ? "On" : "Not set up")
++                Section("共享") {
++                    LabeledContent("剪贴板与共享文件夹", value: helperRunning ? "已开启" : "未配置")
+                     if !helperRunning {
+-                        Button("Type the Set Up Command") {
++                        Button("输入配置命令") {
+                             showDetails = false
+                             Task {
+                                 try? await Task.sleep(nanoseconds: 600_000_000)
+@@ -525,25 +525,25 @@
+                          : "Once for each Mac: open Terminal on the Mac, tap this, then press Return. When macOS asks about henge-agent and local networks, choose Allow. It types \(Sharing.setUpCommand) and needs the Mac's keyboard layout to be U.S.")
+                         .font(.footnote).foregroundStyle(.secondary)
+                 }
+-                Section("Lighter macOS") {
+-                    Button("Type the Lighter macOS Command") {
++                Section("轻量 macOS") {
++                    Button("输入轻量 macOS 命令") {
+                         showDetails = false
+                         Task {
+                             try? await Task.sleep(nanoseconds: 600_000_000)
+                             await Keys.typeSlowly(Sharing.lightenCommand)
+                         }
+                     }
+-                    Button("Type the Undo Command") {
++                    Button("输入撤销命令") {
+                         showDetails = false
+                         Task {
+                             try? await Task.sleep(nanoseconds: 600_000_000)
+                             await Keys.typeSlowly(Sharing.unlightenCommand)
+                         }
+                     }
+-                    Text("Less drawing for the emulated CPUs: window and Dock animations, desktop widgets, the screen saver and a moving wallpaper go. Open Terminal on the Mac, tap the button and press Return, then log out and back in. Also turn on Reduce Motion and Reduce Transparency in the Mac's System Settings, Accessibility. Undo puts it back, apart from the wallpaper. Needs the Mac's keyboard layout to be U.S.")
++                    Text("减少模拟 CPU 的绘制负担：关掉窗口与程序坞动画、桌面小组件、屏幕保护程序和动态壁纸。在 Mac 上打开终端，点按钮后按回车，然后注销再登录。同时在 Mac 的系统设置 ▸ 辅助功能里打开「减弱动态效果」和「降低透明度」。「撤销」可以还原，壁纸除外。需要把 Mac 的键盘布局设为「美国」。")
+                         .font(.footnote).foregroundStyle(.secondary)
+                 }
+-                Section("Log") {
++                Section("日志") {
+                     VStack(alignment: .leading, spacing: 1) {
+                         ForEach(Array(log.suffix(30).enumerated()), id: \.offset) { _, line in
+                             Text(line).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+@@ -562,7 +562,7 @@
+         switch state {
+         case .nominal: return "Normal"
+         case .fair: return "Warm"
+-        case .serious: return "Hot — performance reduced"
++        case .serious: return "过热 — 性能已降低"
+         case .critical: return "Critical"
+         @unknown default: return "Unknown"
+         }
+@@ -591,7 +591,7 @@
+         let ram = GuestMemory.prepare(mac)
+         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
+         guard ram >= 1024 else {
+-            error = "There is not room for this Mac's memory: it needs a few GB of free storage."
++            error = "装不下这台 Mac 的内存：需要几个 GB 的可用存储空间。"
+             return
+         }
+         var buffer = [CChar](repeating: 0, count: 256)
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/SettingsView.swift work/ios/Henge/SettingsView.swift
+--- base/ios/Henge/SettingsView.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/SettingsView.swift	2026-11-26 02:54:28.163868387 +0800
+@@ -18,19 +18,23 @@
+     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
+     @AppStorage(InstantResume.key) private var instantResume = false
+     @AppStorage(MacAppsFeature.key) private var macApps = false
++    @AppStorage(MacRuntime.fpsKey) private var macFPS = 30
++    @AppStorage(MacRuntime.maxAppsKey) private var macMaxApps = 3
++    @AppStorage(MacScreenSize.key) private var macDensity = 1.0
++    @AppStorage(MacRuntime.thermalKey) private var macThermal = true
+ 
+     /// The second footer paragraph: how you click, given the selected input mode.
+     private var inputDescription: String {
+         if inputMode == .touchscreen {
+-            return "Tap to click once. Tap then hold to begin dragging. Quickly tap with two fingers to right-click."
++            return "点一下是单击。按住再拖动是拖拽。双指快速点按是右键。"
+         }
+         switch volumeMode {
+         case .delayHold:
+-            return "Delay hold waits to see if you're holding or just clicking the volume button, which results in all clicks being ~0.5s long."
++            return "延迟判定：先等一小会儿，判断你是在按住还是只点一下音量键，代价是每次点击都约 0.5 秒长。"
+         case .tapThenDrag:
+-            return "Tap then drag waits to see if you're holding or just clicking the volume button, but it unconditionally sends a single click regardless of whether you tap or hold, which results in shorter clicks at the cost of sending a click before holding."
++            return "点按后拖动：先等一小会儿，但无论你是点还是按都会先发一次单击，点击更短，代价是按住之前会先点一下。"
+         case .intercept:
+-            return "Activates the camera in order to intercept volume keys properly. This causes the volume keys to behave in the same way a mouse's buttons do, but it causes higher temperatures, as the camera is always on."
++            return "打开摄像头来准确截获音量键。这样音量键的手感和鼠标按键一致，但摄像头一直开着，机身会更热。"
+         }
+     }
+ 
+@@ -38,25 +42,25 @@
+         NavigationStack {
+             Form {
+                 Section("JIT") {
+-                    LabeledContent("Status", value: JITBootstrap.ready ? "On" : "Off")
+-                    Picker("Method", selection: $jit.method) {
++                    LabeledContent("状态", value: JITBootstrap.ready ? "已开启" : "已关闭")
++                    Picker("方式", selection: $jit.method) {
+                         ForEach(JITMethod.allCases) { Text($0.title).tag($0) }
+                     }
+                     Text(jit.method == .automatic ? jit.automaticDescription : "Henge uses \(jit.method.title).")
+                         .font(.footnote).foregroundStyle(.secondary)
+-                    Button("Set up JIT") { jit.showSetup = true }
+-                    Toggle("Turn on JIT when Henge opens", isOn: $jitAtLaunch)
++                    Button("设置 JIT") { jit.showSetup = true }
++                    Toggle("打开 Henge 时自动开启 JIT", isOn: $jitAtLaunch)
+                     if jitAtLaunch {
+-                        Text("Henge connects LocalDevVPN first when it is off, and comes back.")
++                        Text("Henge 会先连上 LocalDevVPN（如果它是关着的），然后自动回来。")
+                             .font(.footnote).foregroundStyle(.secondary)
+                     }
+-                    LabeledContent("Code region", value: "\(JITBootstrap.jitBytes >> 20) MB, claimed once per launch")
++                    LabeledContent("代码区域", value: "\(JITBootstrap.jitBytes >> 20) MB, claimed once per launch")
+                 }
+                 .listRowBackground(Desk.card)
+-                Section("Memory") {
+-                    LabeledContent("Extra memory", value: Entitlements.increasedMemory ? "On" : "Off")
+-                    LabeledContent("Henge's limit", value: ByteText.string(UInt64(Entitlements.memoryLimitAtLaunch)))
+-                    LabeledContent("Free for Henge", value: ByteText.string(UInt64(henge_available_memory())))
++                Section("内存") {
++                    LabeledContent("额外内存", value: Entitlements.increasedMemory ? "已开启" : "已关闭")
++                    LabeledContent("Henge 的上限", value: ByteText.string(UInt64(Entitlements.memoryLimitAtLaunch)))
++                    LabeledContent("Henge 可用内存", value: ByteText.string(UInt64(henge_available_memory())))
+                     Text(Entitlements.increasedMemory
+                          ? "A Mac's memory is kept out of this limit once JIT is on. If iOS refuses that, it uses free storage instead."
+                          : "This install isn't signed with the increased memory limit entitlement. Reinstall Henge with a certificate that has it. Export your Mac first if the reinstall replaces the app's data.")
+@@ -64,89 +68,131 @@
+                 }
+                 .listRowBackground(Desk.card)
+                 if Device.isPad {
+-                    Section("Mouse and Trackpad") {
++                    Section("鼠标与触控板") {
+                         VStack(alignment: .leading, spacing: 4) {
+-                            Text("Pointer speed")
++                            Text("指针速度")
+                             Slider(value: $mouseSpeed, in: 0.5...3)
+                         }
+-                        Toggle("Reverse scrolling", isOn: $reverseScrolling)
++                        Toggle("反向滚动", isOn: $reverseScrolling)
+                         VStack(alignment: .leading, spacing: 4) {
+-                            Text("Scroll speed")
++                            Text("滚轮速度")
+                             Slider(value: $scrollSpeed, in: 0.1...1.5)
+                         }
+-                        Toggle("Swap physical right and middle buttons", isOn: $swapMouseButtons)
+-                        Text("Only enable this if your physical mouse's right and middle buttons are reversed in the Mac. Touch controls stay unchanged. Restart the Mac session to apply.")
++                        Toggle("交换实体鼠标的右键与中键", isOn: $swapMouseButtons)
++                        Text("只有当你的实体鼠标右键和中键在 Mac 里反了，才需要打开。触摸操作不受影响。重启 Mac 会话后生效。")
+                             .font(.footnote).foregroundStyle(.secondary)
+-                        Text("A Magic Keyboard or a Bluetooth mouse moves the Mac's pointer. Pointer speed changes apply the next time a Mac starts; scroll speed changes apply immediately.")
++                        Text("Magic Keyboard 或蓝牙鼠标可以直接驱动 Mac 的指针。指针速度在下次启动 Mac 时生效；滚轮速度立即生效。")
+                             .font(.footnote).foregroundStyle(.secondary)
+                     }
+                     .listRowBackground(Desk.card)
+                 }
+                 if !Device.isPad {
+-                    Section("Trackpad") {
+-                        Picker("Input mode", selection: $inputMode) {
+-                            Text("Touchscreen").tag(VolumeClicks.InputMode.touchscreen)
+-                            Text("Volume buttons").tag(VolumeClicks.InputMode.volumeButtons)
++                    Section("触控板") {
++                        Picker("输入方式", selection: $inputMode) {
++                            Text("触摸屏").tag(VolumeClicks.InputMode.touchscreen)
++                            Text("音量键").tag(VolumeClicks.InputMode.volumeButtons)
+                         }
+                         .pickerStyle(.menu)
+                         if inputMode == .volumeButtons {
+-                            Picker("Button mode", selection: $volumeMode) {
+-                                Text("Delay hold").tag(VolumeClicks.Mode.delayHold)
+-                                Text("Tap then drag").tag(VolumeClicks.Mode.tapThenDrag)
+-                                Text("Camera intercept").tag(VolumeClicks.Mode.intercept)
++                            Picker("按键模式", selection: $volumeMode) {
++                                Text("延迟判定").tag(VolumeClicks.Mode.delayHold)
++                                Text("点按后拖动").tag(VolumeClicks.Mode.tapThenDrag)
++                                Text("摄像头截获").tag(VolumeClicks.Mode.intercept)
+                             }
+                             .pickerStyle(.menu)
+-                            Toggle("Swap buttons", isOn: $swapButtons)
++                            Toggle("交换按键", isOn: $swapButtons)
+                         }
+-                        Text("Henge is able to emulate a Magic Trackpad, allowing you to perform native macOS gestures using your device's touchscreen.\n\n\(inputDescription)")
++                        Text("Henge 可以模拟一块 Magic Trackpad，让你用设备的触摸屏做出原生的 macOS 手势。\n\n\(inputDescription)")
+                             .font(.footnote).foregroundStyle(.secondary)
+                     }
+                     .listRowBackground(Desk.card)
+                 }
+-                Section("Performance") {
+-                    Picker("Mac refresh rate", selection: $refreshRate) {
++                Section("性能") {
++                    Picker("Mac 刷新率", selection: $refreshRate) {
+                         Text("30 Hz").tag(30)
+                         Text("60 Hz").tag(60)
+                         Text("120 Hz").tag(120)
+                     }
+                     .pickerStyle(.segmented)
+-                    Toggle("Faster disk writes", isOn: $fastFlush)
+-                    Toggle("Quicker wake from idle", isOn: $wfiSpin)
+-                    Toggle("Superblocks (experimental)", isOn: $superblocks)
+-                    Picker("Code cache", selection: $codeCacheMB) {
++                    Toggle("更快的磁盘写入", isOn: $fastFlush)
++                    Toggle("更快地从空闲唤醒", isOn: $wfiSpin)
++                    Toggle("超级块（实验性）", isOn: $superblocks)
++                    Picker("代码缓存", selection: $codeCacheMB) {
+                         Text("512 MB").tag(512)
+                         Text("1 GB").tag(1024)
+                         Text("1.5 GB").tag(1536)
+                     }
+-                    Text("A bigger code cache empties less often and takes more memory (about 1.75 times its size); Henge picks one by its memory limit: 1.5 GB where there is plenty, 512 MB where there is little. Applies the next time Henge opens. If JIT stops turning on, or a Mac closes Henge during setup, choose a smaller one.")
++                    Text("代码缓存越大，清空得越少，但占用内存越多（约为其大小的 1.75 倍）；Henge 按内存上限自动选：内存充裕用 1.5 GB，紧张用 512 MB。下次打开 Henge 时生效。如果 JIT 开不起来，或设置途中 Mac 把 Henge 挤掉，就选小一点的。")
+                         .font(.footnote).foregroundStyle(.secondary)
+-                    Text("macOS draws a frame for every refresh: 30 Hz leaves the most of the emulated CPU to apps, at the cost of choppier animation; 60 Hz is smoother. Faster disk writes order them without waiting for a full sync; a sudden power loss could lose the last ones. Quicker wake keeps an idle CPU watching for work for 50 µs, at some battery cost. Superblocks let translated code run past conditional branches. Changes apply the next time a Mac starts.")
++                    Text("macOS 每刷新一次画一帧：30 Hz 把最多的模拟 CPU 留给应用，代价是动画更卡；60 Hz 更顺。更快的磁盘写入不必等完整同步就能定序，但突然断电可能丢掉最后几次写入。更快的唤醒让空闲 CPU 多观察 50 微秒，会多耗一点电。超级块让转译后的代码能跨条件分支连跑。改动在下次启动 Mac 时生效。")
+                         .font(.footnote).foregroundStyle(.secondary)
+                 }
+                 .listRowBackground(Desk.card)
+-                Section("Instant Resume") {
+-                    Toggle("Resume where you left off", isOn: $instantResume)
+-                    Text("When you leave Henge, the running Mac is saved to storage, and opening it again picks up where it was in a few seconds, even after iOS closes Henge. The save is about the size of the Mac's memory in use, compressed. The Mac pauses while Henge is in the background, so its sound stops. Experimental.")
++                Section("即时恢复") {
++                    Toggle("从上次的地方继续", isOn: $instantResume)
++                    Text("离开 Henge 时，正在运行的 Mac 会存到存储里，再打开几秒钟就能接着用，即使 iOS 已经把 Henge 关掉也一样。存档大小约为 Mac 已用内存压缩后的大小。Henge 在后台时 Mac 会暂停，声音也会停。实验性。")
+                         .font(.footnote).foregroundStyle(.secondary)
+                 }
+                 .listRowBackground(Desk.card)
+-                Section("Mac Apps") {
+-                    Toggle("Mac apps without macOS", isOn: $macApps)
+-                    Text("Bring in a .dmg or an .app (the + button on Home) and run it inside Henge through its own translation layer, without starting a Mac. Programs without windows run today; apps with windows don't yet. Experimental.")
++                Section("Mac 应用") {
++                    Toggle("不启动 macOS 跑 Mac 应用", isOn: $macApps)
++                    Text("导入 .dmg 或 .app（首页上的 + 按钮），就能通过 Henge 自带的转译层在 Henge 里运行，不必启动 Mac。无窗口的程序现在就能跑；带窗口的应用可以多个同屏，实验性。")
++                        .font(.footnote).foregroundStyle(.secondary)
++                }
++                Section("Mac 应用性能") {
++                    Picker("帧率上限", selection: $macFPS) {
++                        Text("60 帧").tag(60)
++                        Text("30 帧").tag(30)
++                        Text("20 帧").tag(20)
++                    }
++                    .pickerStyle(.segmented)
++                    Text("Mac 应用的画面由 CPU 画出来，帧率直接等于发热。日常办公 30 帧足够；想更省电选 20 帧。")
++                        .font(.footnote).foregroundStyle(.secondary)
++
++                    Picker("同时运行", selection: $macMaxApps) {
++                        Text("2 个").tag(2)
++                        Text("3 个").tag(3)
++                        Text("5 个").tag(5)
++                        Text("8 个").tag(8)
++                    }
++                    .pickerStyle(.segmented)
++                    Text("每多开一个应用就多占一份内存和代码缓存。4 GB 机型建议 2 个。")
++                        .font(.footnote).foregroundStyle(.secondary)
++
++                    Picker("屏幕密度", selection: $macDensity) {
++                        Text("整个屏幕").tag(1.0)
++                        Text("四分之三").tag(0.75)
++                        Text("一半").tag(0.5)
++                    }
++                    .pickerStyle(.segmented)
++                    Text("应用以为自己的屏幕有多大。调小等于让界面变大、要画的像素变少，最省性能。上限永远是这块屏幕本身。")
++                        .font(.footnote).foregroundStyle(.secondary)
++
++                    Toggle("过热时自动降速", isOn: $macThermal)
++                    Text("现在：\(MacRuntime.thermalSummary)。打开后，机身变热时自动降帧、降密度，凉下来自动恢复，不用你手动改。")
++                        .font(.footnote).foregroundStyle(.secondary)
++                }
++                .listRowBackground(Desk.card)
++                Section("本机") {
++                    LabeledContent("机型", value: Device.marketingName)
++                    LabeledContent("芯片", value: Device.chipName ?? "—")
++                    LabeledContent("内存", value: ByteText.string(ProcessInfo.processInfo.physicalMemory))
++                    LabeledContent("销售地区", value: DeviceRegion.summary)
++                    Text("转译运行的 Mac 应用看到的机型、芯片与内存由「Mac 应用」里的身份设置决定；时间和网络永远是真实的。")
+                         .font(.footnote).foregroundStyle(.secondary)
+                 }
+                 .listRowBackground(Desk.card)
+-                Section("Appearance") {
+-                    Picker("Appearance", selection: $appearance) {
++                Section("外观") {
++                    Picker("外观", selection: $appearance) {
+                         ForEach(DeskAppearance.allCases) { Text($0.title).tag($0) }
+                     }
+                     .pickerStyle(.segmented)
+-                    Text("System follows the \(Device.name)'s Light or Dark setting. Henge stays dark while a Mac is running.")
++                    Text("跟随 \(Device.name) 的浅色／深色设置。Mac 运行时 Henge 保持深色。")
+                         .font(.footnote).foregroundStyle(.secondary)
+                 }
+                 .listRowBackground(Desk.card)
+-                Section("Log") {
+-                    ShareLink(item: HengeLog.logFileURL) { Label("Share henge.log", systemImage: "square.and.arrow.up") }
++                Section("日志") {
++                    ShareLink(item: HengeLog.logFileURL) { Label("分享 henge.log", systemImage: "square.and.arrow.up") }
+                 }
+                 .listRowBackground(Desk.card)
+             }
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/StoppedMacView.swift work/ios/Henge/StoppedMacView.swift
+--- base/ios/Henge/StoppedMacView.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/StoppedMacView.swift	2026-11-26 02:45:26.928356862 +0800
+@@ -9,10 +9,10 @@
+ 
+     private var title: String {
+         switch outcome {
+-        case Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue): return "Mac shut down"
+-        case Int32(HENGE_VM_OUTCOME_RESTART.rawValue): return "Mac requested a restart"
+-        case Int32(HENGE_VM_OUTCOME_HOST_STOP.rawValue): return "Mac stopped"
+-        default: return "Mac stopped unexpectedly"
++        case Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue): return "Mac 已关机"
++        case Int32(HENGE_VM_OUTCOME_RESTART.rawValue): return "Mac 请求重启"
++        case Int32(HENGE_VM_OUTCOME_HOST_STOP.rawValue): return "Mac 已停止"
++        default: return "Mac 意外停止"
+         }
+     }
+ 
+@@ -20,7 +20,7 @@
+         let next = "You can start this Mac again or return to your Macs."
+         switch outcome {
+         case Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue), Int32(HENGE_VM_OUTCOME_HOST_STOP.rawValue): return next
+-        case Int32(HENGE_VM_OUTCOME_RESTART.rawValue): return "The Mac is ready to start again."
++        case Int32(HENGE_VM_OUTCOME_RESTART.rawValue): return "Mac 已准备好再次启动。"
+         default: return "The Mac stopped: \(reason). " + next
+         }
+     }
+@@ -31,8 +31,8 @@
+             Text(title).font(.headline)
+             Text(detail).font(.subheadline).foregroundStyle(.white.opacity(0.7))
+                 .multilineTextAlignment(.center)
+-            if let start { Button("Start Mac", action: start).buttonStyle(.borderedProminent) }
+-            Button("Close", action: close).buttonStyle(.bordered)
++            if let start { Button("启动 Mac", action: start).buttonStyle(.borderedProminent) }
++            Button("关闭", action: close).buttonStyle(.bordered)
+         }
+         .foregroundStyle(.white)
+         .padding(24)
+diff -ruN -x .git -x Screenshots -x third_party base/ios/Henge/Theme.swift work/ios/Henge/Theme.swift
+--- base/ios/Henge/Theme.swift	2026-11-16 02:14:26.000000000 +0800
++++ work/ios/Henge/Theme.swift	2026-11-26 02:45:26.892373694 +0800
+@@ -35,9 +35,9 @@
+     var id: String { rawValue }
+     var title: String {
+         switch self {
+-        case .system: return "System"
+-        case .light: return "Light"
+-        case .dark: return "Dark"
++        case .system: return "跟随系统"
++        case .light: return "浅色"
++        case .dark: return "深色"
+         }
+     }
+     var style: UIUserInterfaceStyle {
+diff -ruN -x .git -x Screenshots -x third_party base/tl/loader/tl_loader.c work/tl/loader/tl_loader.c
+--- base/tl/loader/tl_loader.c	2026-11-16 02:14:26.000000000 +0800
++++ work/tl/loader/tl_loader.c	2026-11-26 02:21:29.850184194 +0800
+@@ -98,6 +98,10 @@
+ static TlImage *g_order[1024]; /* every image, in the order it was loaded */
+ static _Atomic int g_norder;
+ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
++/* Namespaces: the app's own processes (processes_as_threads) and programs the host runs beside the first one take
++   their numbers from here, so a host-given program never shares one with the app's own. */
++static int g_next_ns = 1;
++static pthread_mutex_t g_proc_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
+ /* ---- messages ---- */
+ 
+@@ -1549,6 +1553,21 @@
+     return load_and_link(path, 0, err, errlen);
+ }
+ 
++/* A namespace for a program the host runs beside the first one. The app's own processes take theirs from the same
++   run (g_next_ns), so the two never meet. */
++int tl_reserve_ns(void) {
++    pthread_mutex_lock(&g_proc_lock);
++    int ns = g_next_ns < TL_MAX_NS ? g_next_ns++ : 0;
++    pthread_mutex_unlock(&g_proc_lock);
++    return ns;
++}
++
++TlImage *tl_load_as(TlHost *host, const char *path, int ns, char *err, size_t errlen) {
++    if (ns <= 0 || ns >= TL_MAX_NS) { set_err(err, errlen, "namespace %d is not one this loader gives out", ns); return NULL; }
++    g_host = host;
++    return load_and_link(path, ns, err, errlen);
++}
++
+ TlImage *tl_load_library(const char *path, char *err, size_t errlen) {
+     if (!g_host) { set_err(err, errlen, "nothing loaded yet"); return NULL; }
+     return load_and_link(path, 0, err, errlen);
+@@ -1836,8 +1855,6 @@
+ #include <signal.h>
+ 
+ 
+-static int g_next_ns = 1;
+-static pthread_mutex_t g_proc_lock = PTHREAD_MUTEX_INITIALIZER;
+ static pthread_cond_t g_proc_cond = PTHREAD_COND_INITIALIZER;
+ /* Started processes that looked up their parent's rendezvous name, in order: the parent's server takes them in the
+    same order as their requests arrive. */
+diff -ruN -x .git -x Screenshots -x third_party base/tl/loader/tl_loader.h work/tl/loader/tl_loader.h
+--- base/tl/loader/tl_loader.h	2026-11-16 02:14:26.000000000 +0800
++++ work/tl/loader/tl_loader.h	2026-11-26 02:21:01.737400988 +0800
+@@ -74,6 +74,24 @@
+    bundle's frameworks, fixes them up, registers them, and runs their
+    initializers. NULL with a reason in err. */
+ TlImage *tl_load(TlHost *host, const char *path, char *err, size_t errlen);
++
++/* ---- several programs side by side --------------------------------------------------------------
++
++   A namespace is one process's world inside this process: its own copy of every library it loads (its own
++   globals), its own main executable, its own large reservations. Programs the app itself starts already get one
++   each (processes_as_threads). These let the host give a second, unrelated program a namespace of its own, so
++   several Mac apps can be loaded and run at once where the host cannot fork: each keeps its globals apart, and
++   the region's `used` counter places them one after another.
++
++   What stays shared, because the host has one process: the Objective-C runtime (so two copies of a framework's
++   class still collide: a second app bringing its own Foundation is not isolated), the C library, and whatever the
++   app and the host both bind to. Give each app its own TlHost (its own region) when they must not share an address
++   space at all, or one region and let them take turns. */
++
++/* A namespace number no program of the app's uses yet (1...), or 0 when there are none left. */
++int tl_reserve_ns(void);
++/* Loads path as the program of namespace ns (one from tl_reserve_ns). 0 is the first program: same as tl_load. */
++TlImage *tl_load_as(TlHost *host, const char *path, int ns, char *err, size_t errlen);
+ /* Make NSBundle.mainBundle the guest app's bundle (the folder holding Contents/MacOS/<executable>) for the
+    guest's own code; the host (and the system acting for it) keeps its own. 0, or -1. */
+ int tl_adopt_main_bundle(const char *app_path);
+diff -ruN -x .git -x Screenshots -x third_party base/tl/shim/appkit/HKCore.m work/tl/shim/appkit/HKCore.m
+--- base/tl/shim/appkit/HKCore.m	2026-11-16 02:14:26.000000000 +0800
++++ work/tl/shim/appkit/HKCore.m	2026-11-26 02:34:56.112634699 +0800
+@@ -7,12 +7,62 @@
+ #import <objc/runtime.h>
+ #include <mach/mach_time.h>
+ #include <pthread.h>
++#include <stdatomic.h>
+ 
+-static const HKPresenter *g_presenter;
+-static HKPresenter g_default_presenter = {{1280, 800}, 2, NULL};
+-
+-void hk_set_presenter(const HKPresenter *presenter) { g_presenter = presenter; }
+-const HKPresenter *hk_presenter(void) { return g_presenter ? g_presenter : &g_default_presenter; }
++/* The presenter is copied, not pointed at: the host's struct is on its stack, and this side changes the screen (a
++   Mac app's screen follows the device: rotated, resized, several apps on one screen) after it was handed over. */
++static HKPresenter g_presenter = {{1280, 800}, 2, NULL};
++
++void hk_set_presenter(const HKPresenter *presenter) {
++    if (presenter) g_presenter = *presenter;
++}
++const HKPresenter *hk_presenter(void) { return &g_presenter; }
++
++CGSize hk_screen_size(void) { return g_presenter.screen_size; }
++CGFloat hk_screen_scale(void) { return g_presenter.scale; }
++
++/* ---- several apps in one process ---------------------------------------------------------------
++
++   Each app is a namespace of the loader. Its code runs on the thread that enters its main, and what it builds
++   (windows, menus) belongs to that namespace: hk_ns_enter says which, before the app's main is called. The host's
++   own calls run with 0 (the first app).
++
++   One process has one NSApplication, one event queue, one key window. That is also how a Mac behaves towards an app:
++   only the front app's menus take the menu bar, and only a window of the front app has the keyboard. So the several
++   apps share NSApp, and the host says which one is in front (hk_set_active_ns) to decide whose menus the bar shows. */
++static _Thread_local int g_ns_here;
++static _Atomic int g_ns_active;
++void hk_ns_enter(int ns) { g_ns_here = ns; }
++int hk_ns_current(void) { return g_ns_here; }
++int hk_active_ns(void) { return atomic_load(&g_ns_active); }
++void hk_set_active_ns(int ns) {
++    if (ns < 0 || ns >= HK_MAX_NS) return;
++    atomic_store(&g_ns_active, ns);
++    [[NSNotificationCenter defaultCenter] postNotificationName:@"HKActiveAppChangedNotification" object:NSApp];
++}
++
++/* With apps side by side, one loop cannot belong to one of them: -[NSApplication run] lays the app out and returns,
++   and the host pumps the queue itself (hk_pump), so every app's main can run and every app's windows are served by the
++   same loop. Without it (the default), -run blocks as AppKit's does. */
++static _Atomic int g_multi_app;
++void hk_set_multi_app(int on) { atomic_store(&g_multi_app, on ? 1 : 0); }
++int hk_multi_app(void) { return atomic_load(&g_multi_app); }
++
++/* One event from the queue, sent as -[NSApplication run] would send it. 0 when none came in time. Runs the thread's
++   CFRunLoop on the way (timers, animations). The host calls it from its own display link. */
++int hk_pump(double seconds_to_wait) {
++    @autoreleasepool {
++        NSApplication *app = NSApp;
++        if (!app) return 0;
++        NSEvent *e = [app nextEventMatchingMask:NSEventMaskAny
++                                      untilDate:[NSDate dateWithTimeIntervalSinceNow:seconds_to_wait]
++                                         inMode:NSDefaultRunLoopMode
++                                        dequeue:YES];
++        if (!e) return 0;
++        [app sendEvent:e];
++        return 1;
++    }
++}
+ 
+ static void tell_presenter(NSWindow *w, int visible) {
+     const HKPresenter *p = hk_presenter();
+@@ -607,12 +657,14 @@
+     CALayer *_root;
+     NSInteger _number;
+     BOOL _visible;
++    int _hk_ns; /* the app this window belongs to (a loader namespace): whose menus it takes, and where it is shown */
+     NSResponder *_firstResponder;
+     NSMutableArray<NSWindow *> *_children;
+     __unsafe_unretained NSView *_mouseDownView;
+     __unsafe_unretained NSView *_hoverView;
+     NSEvent *_currentEvent;
+ }
++- (int)hk_ns;
+ @end
+ 
+ static NSArray<NSString *> *window_notifications(void) {
+@@ -655,6 +707,7 @@
+ - (instancetype)initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)defer {
+     if ((self = [super init])) {
+         _frame = rect;
++        _hk_ns = hk_ns_current();
+         _styleMask = style;
+         _frame = [self constrainFrameRect:rect toScreen:nil];
+         rect = _frame;
+@@ -1100,6 +1153,9 @@
+ - (void)invalidateCursorRectsForView:(NSView *)view {}
+ - (void)setIsVisible:(BOOL)v { if (v) [self orderFront:nil]; else [self orderOut:nil]; }
+ - (NSInteger)orderedIndex { return [g_windows indexOfObjectIdenticalTo:self]; }
++
++/* The app (a loader namespace) this window belongs to: whose menu bar is whose, and which app a click is for. */
++- (int)hk_ns { return _hk_ns; }
+ - (NSString *)description {
+     return [NSString stringWithFormat:@"<%@ %p #%ld %@>", NSStringFromClass([self class]), self, (long)_number, NSStringFromRect(_frame)];
+ }
+@@ -1112,6 +1168,15 @@
+     return out;
+ }
+ 
++NSArray<NSWindow *> *hk_visible_windows_of_ns(int ns) {
++    NSMutableArray *out = [NSMutableArray array];
++    for (NSWindow *w in g_windows)
++        if (w.isVisible && w.hk_ns == ns) [out addObject:w];
++    return out;
++}
++
++int hk_window_ns(NSWindow *window) { return window ? window.hk_ns : 0; }
++
+ /* ================================================================ events */
+ 
+ @interface NSEvent () {
+@@ -1304,16 +1369,37 @@
+     NSMutableArray<NSWindow *> *_modal; /* windows of the modal sessions, innermost last */
+     NSEvent *_current;
+     NSApplicationActivationPolicy _policy;
++    NSMenu *_mainMenu; /* the front app's menu bar: -setMainMenu: keeps each app's own, -mainMenu answers the front one */
+ }
+ @end
+ 
++/* The menu bar belongs to the front app, as on a Mac: each app's -setMainMenu: is kept under its namespace, and the
++   bar is the front app's. With one app (namespace 0) this is AppKit's plain behaviour. */
++static NSMenu *g_menus[HK_MAX_NS];
++
+ static void wake_perform(void *info) {}
+ 
+ @implementation NSApplication
+-@synthesize delegate = _delegate, mainMenu = _mainMenu, windowsMenu = _windowsMenu, servicesMenu = _servicesMenu,
++@synthesize delegate = _delegate, windowsMenu = _windowsMenu, servicesMenu = _servicesMenu,
+             helpMenu = _helpMenu, appearance = _appearance, presentationOptions = _presentationOptions,
+             applicationIconImage = _applicationIconImage;
+ 
++- (void)setMainMenu:(NSMenu *)menu {
++    int ns = hk_ns_current();
++    if (ns < 0 || ns >= HK_MAX_NS) ns = 0;
++    g_menus[ns] = menu;
++    int front = hk_active_ns();
++    if (front < 0 || front >= HK_MAX_NS) front = 0;
++    if (ns == front) _mainMenu = menu;
++}
++
++- (NSMenu *)mainMenu {
++    int front = hk_active_ns();
++    if (front < 0 || front >= HK_MAX_NS) front = 0;
++    NSMenu *m = g_menus[front];
++    return m ?: _mainMenu;
++}
++
+ + (void)load { hk_add_fallback(self); }
+ 
+ + (instancetype)sharedApplication {
+@@ -1431,6 +1517,14 @@
+ - (void)run {
+     /* A stop: during finishLaunching (GLFW's delegate stops the run it started from applicationDidFinishLaunching:)
+        ends this run, as in AppKit: the request is cleared before launching, not after. */
++    if (hk_multi_app()) {
++        /* Apps side by side: the app lays itself out (windows, menu bar) and returns; the host's loop serves them
++           all, so a second app's main can run at all. */
++        _stopRequested = NO;
++        [self finishLaunching];
++        _running = NO;
++        return;
++    }
+     _running = YES;
+     _stopRequested = NO;
+     [self finishLaunching];
+@@ -1535,15 +1629,20 @@
+ 
+ - (void)sendEvent:(NSEvent *)event {
+     NSEvent *saved = _current;
++    int savedNs = hk_ns_current();
++    /* The event's window says which app it is for: the app's code it reaches runs as that app (what it builds, the
++       menus it answers with). One process serves every app's windows, so this is what keeps them apart. */
++    if (event.window) hk_ns_enter(hk_window_ns(event.window));
+     _current = event;
+     event = [NSEvent hk_runLocalMonitors:event];
+     if (event) {
+         NSEventType t = event.type;
+         NSWindow *w = event.window;
+         if (t == NSEventTypeKeyDown || t == NSEventTypeKeyUp || t == NSEventTypeFlagsChanged) {
+-            if (t == NSEventTypeKeyDown && (event.modifierFlags & NSEventModifierFlagCommand) && [(id)_mainMenu respondsToSelector:@selector(performKeyEquivalent:)] &&
+-                ((BOOL(*)(id, SEL, id))objc_msgSend)((id)_mainMenu, @selector(performKeyEquivalent:), event)) {
++            if (t == NSEventTypeKeyDown && (event.modifierFlags & NSEventModifierFlagCommand) && [(id)[self mainMenu] respondsToSelector:@selector(performKeyEquivalent:)] &&
++                ((BOOL(*)(id, SEL, id))objc_msgSend)((id)[self mainMenu], @selector(performKeyEquivalent:), event)) {
+             } else {
++                if (!event.window && g_key) hk_ns_enter(hk_window_ns(g_key));
+                 [(g_key ?: w) sendEvent:event];
+             }
+         } else if (w) {
+@@ -1551,6 +1650,7 @@
+         }
+     }
+     _current = saved;
++    hk_ns_enter(savedNs);
+ }
+ 
+ - (BOOL)sendAction:(SEL)action to:(id)target from:(id)sender {
+@@ -1727,3 +1827,25 @@
+ @implementation NSPanel
+ - (BOOL)canBecomeMainWindow { return NO; }
+ @end
++
++/* ================================================================ the screen, changed while apps run */
++
++/* What a Mac does when its display is resized: the apps lay out again for the new size. The presenter keeps showing
++   the same window tree; it scales it to fit, so this only decides how much room the apps think they have. */
++void hk_set_screen(CGSize size, CGFloat scale) {
++    if (size.width < 320 || size.height < 240) return; /* smaller than any Mac's smallest screen */
++    if (scale < 1 || scale > 4) scale = g_presenter.scale;
++    if (CGSizeEqualToSize(size, g_presenter.screen_size) && scale == g_presenter.scale) return;
++    g_presenter.screen_size = size;
++    g_presenter.scale = scale;
++    hk_log("the screen is now %.0f x %.0f points at %gx", size.width, size.height, (double)scale);
++    for (NSWindow *w in [g_windows copy]) {
++        if (!w.isVisible) continue;
++        NSRect f = [w constrainFrameRect:w.frame toScreen:nil];
++        if (!NSEqualRects(f, w.frame)) [w setFrame:f display:YES];
++    }
++    /* The name as a literal: this file never names the constants HKConstants.m defines (they are looked up by the
++       program's code, not by this side). */
++    [[NSNotificationCenter defaultCenter] postNotificationName:@"NSApplicationDidChangeScreenParametersNotification"
++                                                        object:NSApp];
++}
+diff -ruN -x .git -x Screenshots -x third_party base/tl/shim/appkit/HKShim.h work/tl/shim/appkit/HKShim.h
+--- base/tl/shim/appkit/HKShim.h	2026-11-16 02:14:26.000000000 +0800
++++ work/tl/shim/appkit/HKShim.h	2026-11-26 02:32:32.031373459 +0800
+@@ -458,6 +458,17 @@
+ void hk_set_presenter(const HKPresenter *presenter);
+ const HKPresenter *hk_presenter(void);
+ 
++/* ---- the screen, while apps run ----------------------------------------------------------------
++
++   The presenter takes what the Mac apps think their screen is from here, not from the host's struct, so it can
++   change while they run (the device rotated, the window resized, or several apps put on one screen). A change makes
++   the apps lay out again, as a Mac does when a display is resized; the windows that no longer fit are pulled back
++   onto it. The host still decides how big it can be (never more than its own screen) and how it is scaled. */
++#define HK_MAX_NS 64
++void hk_set_screen(CGSize size, CGFloat scale);
++CGSize hk_screen_size(void);
++CGFloat hk_screen_scale(void);
++
+ /* Input from the presenter, in the window's coordinates (points, origin bottom left as AppKit's). Any thread: the
+    event is posted to the application's queue. */
+ /* Menus that pop up, drawn and tracked by Henge (HKMenu.m). */
+@@ -472,6 +483,21 @@
+ 
+ /* The application's windows that are on screen, back to front. */
+ NSArray<NSWindow *> *hk_visible_windows(void);
++/* One app's windows among them (a loader namespace; 0 is the first app), and the namespace a window belongs to. The
++   host shows each app's windows in its own area when several run at once. */
++NSArray<NSWindow *> *hk_visible_windows_of_ns(int ns);
++int hk_window_ns(NSWindow *window);
++/* Which app is in front: its menu bar is the one in the bar, and its windows take the keyboard first. */
++void hk_set_active_ns(int ns);
++int hk_active_ns(void);
++/* The thread's app (a loader namespace), for the code about to run: the host sets it before an app's main is called.
++   Windows and menus built from then on belong to that app. */
++void hk_ns_enter(int ns);
++int hk_ns_current(void);
++/* Apps side by side: -[NSApplication run] lays an app out and returns, and the host pumps the one queue (hk_pump). */
++void hk_set_multi_app(int on);
++int hk_multi_app(void);
++int hk_pump(double seconds_to_wait);
+ 
+ /* ---- binding: what Henge's AppKit answers for a symbol a program imports from AppKit (and the Mac-only C
+    libraries handled here: Carbon, ApplicationServices, CoreVideo's display link, CoreGraphics's displays) ---- */
